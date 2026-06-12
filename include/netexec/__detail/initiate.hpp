@@ -22,7 +22,7 @@ class initiate_t {
     // The io_context must be passed explicitly because exec::basic_task's default
     // context does not propagate custom env queries such as get_io_handle.
     auto operator()(const preconnection& pre, netexec::io_context& ctx) const
-        -> netexec::task<netexec::ip::tcp::socket> {
+        -> exec::task<netexec::ip::tcp::socket> {
         netexec::ip::tcp::endpoint ep(netexec::ip::address_v4::loopback(), pre.remote().port());
         netexec::ip::tcp::socket client(ctx, ep);
 

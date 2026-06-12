@@ -30,7 +30,7 @@ std::unordered_map<std::string, std::string> files{
 // process_request — handle one HTTP GET, send response
 // ---------------------------------------------------------------------------
 
-auto process_request(auto& stream, std::string request) -> net::task<> {
+auto process_request(auto& stream, std::string request) -> exec::task<void> {
     std::istringstream in(request);
     std::string        method, url, version;
     if (!(in >> method >> url >> version) || method != "GET") {
@@ -75,7 +75,7 @@ auto timeout(auto scheduler, auto duration, auto sender) {
 // make_client — read HTTP request from a connected socket, with timeout
 // ---------------------------------------------------------------------------
 
-auto make_client(auto scheduler, auto stream) -> net::task<> {
+auto make_client(auto scheduler, auto stream) -> exec::task<void> {
     char        buffer[16];
     std::string request;
     try {
@@ -108,7 +108,7 @@ auto main() -> int {
     // stdexec::spawn(sender, scope_token) — fire-and-forget inside the scope.
     ex::spawn(
         std::invoke(
-            [](auto scheduler, net::scope& scp, auto& svr) -> net::task<> {
+            [](auto scheduler, net::scope& scp, auto& svr) -> exec::task<void> {
                 while (true) {
                     auto [stream, address] = co_await net::async_accept(svr);
                     std::cout << "received connection from " << address << "\n";

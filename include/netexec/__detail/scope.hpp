@@ -34,6 +34,9 @@ class netexec::detail::scope {
         auto query(const stdexec::get_scheduler_t&) const noexcept {
             return this->_scope->_io_context.get_scheduler();
         }
+        auto query(const stdexec::get_start_scheduler_t&) const noexcept {
+            return this->_scope->_io_context.get_scheduler();
+        }
         template <typename Signal>
         auto query(const stdexec::get_completion_scheduler_t<Signal>&) const noexcept {
             return this->_scope->_io_context.get_scheduler();
