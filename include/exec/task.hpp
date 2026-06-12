@@ -601,7 +601,9 @@ namespace experimental::execution
 
 namespace exec = experimental::execution;
 
-// 在文件末尾，exec:: 别名定义之后加：
+// netexec::task is an alias for exec::basic_task. Networking coroutines use the
+// same task type as the generic stdexec coroutine task; there is no separate
+// netexec task implementation.
 namespace netexec {
     template <class _Ty = void, class _Context = exec::default_task_context<_Ty>>
     using task = exec::basic_task<_Ty, _Context>;

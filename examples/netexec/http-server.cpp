@@ -42,7 +42,8 @@ auto process_request(auto& stream, std::string request) -> net::task<> {
               << (it == files.end() ? "not found" : it->second) << "\n";
 
     std::ostringstream out;
-    out << std::ifstream(it == files.end() ? std::string() : it->second).rdbuf();
+   // out << std::ifstream(it == files.end() ? std::string() : it->second).rdbuf();
+      out << std::ifstream(it == files.end() ? std::string() : it->second, std::ios::binary).rdbuf();
     auto body = out.str();
     out.clear(); out.str({});
     out << "HTTP/1.1 " << (it == files.end() ? "404 not found" : "200 found\r\n")
