@@ -9,7 +9,6 @@
 #include <netexec/__detail/preconnection.hpp>
 #include <netexec/__detail/internet.hpp>
 #include <netexec/__detail/into_expected.hpp>
-#include <exec/task.hpp>
 
 #include <system_error>
 #include <utility>

@@ -10,6 +10,32 @@
 //   etc.
 #pragma once
 
+// Standard library headers needed by netexec
+#include <cstdint>
+#include <cstddef>
+#include <system_error>
+#include <string>
+#include <string_view>
+#include <iostream>
+#include <sstream>
+#include <istream>
+#include <ostream>
+#include <fstream>
+#include <chrono>
+#include <memory>
+#include <vector>
+#include <array>
+#include <unordered_map>
+#include <map>
+#include <optional>
+#include <utility>
+#include <tuple>
+#include <variant>
+#include <algorithm>
+#include <limits>
+#include <exception>
+#include <stdexcept>
+
 #include <netexec/__detail/basic_socket.hpp>
 #include <netexec/__detail/basic_socket_acceptor.hpp>
 #include <netexec/__detail/basic_stream_socket.hpp>
@@ -28,7 +54,6 @@
 #include <netexec/__detail/stop_token.hpp>
 #include <netexec/__detail/timer.hpp>
 #include <netexec/__detail/scope.hpp>
-#include <netexec/task.hpp>
 #include <netexec/__detail/initiate.hpp>
 #include <netexec/__detail/into_expected.hpp>
 #include <netexec/__detail/repeat_effect_until.hpp>
@@ -38,3 +63,4 @@
 #include <netexec/__detail/remote_endpoint.hpp>
 #include <netexec/__detail/rendezvous.hpp>
 #include <netexec/__detail/transport_preference.hpp>
+
