@@ -1,0 +1,128 @@
+// http-server.cpp
+// Ported from beman/net to netexec (stdexec-based networking).
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+
+#include <netexec/net.hpp>
+#include <exec/when_any.hpp>      // exec::when_any
+#include <stdexec/execution.hpp>  // stdexec::spawn, stdexec::then, ...
+
+#include <iostream>
+#include <string>
+#include <fstream>
+#include <sstream>
+#include <string_view>
+#include <unordered_map>
+#include <system_error>
+
+namespace ex  = stdexec;
+namespace net = netexec;
+using namespace std::chrono_literals;
+
+// ---------------------------------------------------------------------------
+
+std::unordered_map<std::string, std::string> files{
+    {"/",            "data/index.html"},
+    {"/favicon.ico", "data/favicon.ico"},
+    {"/logo.png",    "data/logo.png"},
+};
+
+// ---------------------------------------------------------------------------
+// process_request — handle one HTTP GET, send response
+// ---------------------------------------------------------------------------
+
+auto process_request(auto& stream, std::string request) -> net::task<> {
+    std::istringstream in(request);
+    std::string        method, url, version;
+    if (!(in >> method >> url >> version) || method != "GET") {
+        std::cout << "not a [supported] HTTP request\n";
+        co_return;
+    }
+    auto it = files.find(url);
+    std::cout << "url='" << url << "' -> "
+              << (it == files.end() ? "not found" : it->second) << "\n";
+
+    std::ostringstream out;
+    out << std::ifstream(it == files.end() ? std::string() : it->second).rdbuf();
+    auto body = out.str();
+    out.clear(); out.str({});
+    out << "HTTP/1.1 " << (it == files.end() ? "404 not found" : "200 found\r\n")
+        << "Content-Length: " << body.size() << "\r\n\r\n" << body;
+    auto response = out.str();
+
+    co_await net::async_send(stream, net::buffer(response));
+}
+
+// ---------------------------------------------------------------------------
+// timeout — race a sender against a timer; timer win → throw std::error_code
+// Uses exec::when_any (first completion wins, others are cancelled).
+// ---------------------------------------------------------------------------
+
+auto timeout(auto scheduler, auto duration, auto sender) {
+    // Timer branch: completes with set_error(error_code{}) after `duration`
+    auto timer_branch =
+        net::resume_after(scheduler, duration)
+        | ex::then([]() -> std::size_t {
+            throw std::system_error(std::make_error_code(std::errc::timed_out));
+            return 0;
+          });
+
+    // when_any: whichever branch finishes first wins; the other is cancelled.
+    return exec::when_any(std::move(sender), std::move(timer_branch));
+}
+
+// ---------------------------------------------------------------------------
+// make_client — read HTTP request from a connected socket, with timeout
+// ---------------------------------------------------------------------------
+
+auto make_client(auto scheduler, auto stream) -> net::task<> {
+    char        buffer[16];
+    std::string request;
+    try {
+        while (auto n = co_await timeout(scheduler, 3s,
+                                         net::async_receive(stream, net::buffer(buffer)))) {
+            std::string_view sv(buffer, n);
+            request += sv;
+            if (request.npos != sv.find("\r\n\r\n")) {
+                co_await process_request(stream, std::move(request));
+                break;
+            }
+        }
+    } catch (...) {
+        std::cout << "ex: timeout\n";
+    }
+    std::cout << "client done\n";
+}
+
+// ---------------------------------------------------------------------------
+// main
+// ---------------------------------------------------------------------------
+
+auto main() -> int {
+    net::scope             scope;
+    net::ip::tcp::endpoint ep(net::ip::address_v4::any(), 12345);
+    net::ip::tcp::acceptor server(scope.get_context(), ep);
+    std::cout << "listening on " << ep << "\n";
+
+    // Accept loop: spawn a client handler for each new connection.
+    // stdexec::spawn(sender, scope_token) — fire-and-forget inside the scope.
+    ex::spawn(
+        std::invoke(
+            [](auto scheduler, net::scope& scp, auto& svr) -> net::task<> {
+                while (true) {
+                    auto [stream, address] = co_await net::async_accept(svr);
+                    std::cout << "received connection from " << address << "\n";
+                    // Spawn client handler into the same scope
+                    ex::spawn(
+                        make_client(scheduler, std::move(stream))
+                            | ex::upon_error([](auto&&) noexcept {}),
+                        scp.get_token());
+                }
+            },
+            scope.get_context().get_scheduler(),
+            scope,
+            server)
+            | ex::upon_error([](auto&&) noexcept {}),
+        scope.get_token());
+
+    ex::sync_wait(scope.run());
+}

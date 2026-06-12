@@ -69,6 +69,7 @@ class netexec::detail::scope {
         return stdexec::when_all(this->_counting_scope.join(), this->_io_context.async_run());
     }
 
+    auto get_context() -> netexec::io_context& { return this->_io_context; }
     auto get_token() -> token { return {this}; }
 
   private:
