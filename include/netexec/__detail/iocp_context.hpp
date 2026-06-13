@@ -7,6 +7,7 @@
 // This file is only meaningful on Windows / MSVC.
 #ifdef _MSC_VER
 
+#pragma message("using iocp_context")
 // ----------------------------------------------------------------------------
 // Overview
 // --------

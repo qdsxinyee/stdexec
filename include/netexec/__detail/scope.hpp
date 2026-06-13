@@ -73,6 +73,7 @@ class netexec::detail::scope {
     }
 
     auto get_context() -> netexec::io_context& { return this->_io_context; }
+    auto get_scheduler() -> netexec::io_context::scheduler_type { return this->_io_context.get_scheduler(); }
     auto get_token() -> token { return {this}; }
 
   private:

@@ -119,7 +119,7 @@ auto main() -> int {
                         scp.get_token());
                 }
             },
-            scope.get_context().get_scheduler(),
+            scope.get_scheduler(),
             scope,
             server)
             | ex::upon_error([](auto&&) noexcept {}),
