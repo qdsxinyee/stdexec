@@ -89,6 +89,9 @@ class netexec::detail::io_context_scheduler {
     auto cancel(netexec::detail::io_base* cancel_op, netexec::detail::io_base* op) -> void {
         this->d_context->cancel(cancel_op, op);
     }
+    auto poll(::netexec::detail::context_base::poll_operation* op) -> ::netexec::detail::submit_result {
+        return this->d_context->poll(op);
+    }
     auto accept(::netexec::detail::context_base::accept_operation* op) -> ::netexec::detail::submit_result {
         return this->d_context->accept(op);
     }

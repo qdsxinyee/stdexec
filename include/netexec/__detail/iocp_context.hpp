@@ -305,8 +305,8 @@ struct netexec::detail::iocp_context final : ::netexec::detail::context_base {
     // context_base - socket management
     // ------------------------------------------------------------------
 
-    auto make_socket(int fd) -> ::netexec::detail::socket_id override {
-        ::SOCKET s = static_cast<::SOCKET>(fd);
+    auto make_socket(::netexec::detail::native_handle_type handle) -> ::netexec::detail::socket_id override {
+        ::SOCKET s = static_cast<::SOCKET>(handle);
         this->associate(s);
         ++this->d_socket_count;
         return this->d_sockets.insert(::netexec::detail::iocp_record(s));
@@ -379,7 +379,7 @@ struct netexec::detail::iocp_context final : ::netexec::detail::context_base {
     // context_base - event loop
     // ------------------------------------------------------------------
 
-    auto run_one() -> ::std::size_t override {
+    auto run_one() noexcept -> ::std::size_t override {
 
         auto now = ::std::chrono::system_clock::now();
 
@@ -430,6 +430,12 @@ struct netexec::detail::iocp_context final : ::netexec::detail::context_base {
         bool was_empty = (this->d_tasks == nullptr);
         tsk->next      = this->d_tasks;
         this->d_tasks  = tsk;
+    }
+
+    auto poll(::netexec::detail::context_base::poll_operation*)
+        -> ::netexec::detail::submit_result override {
+        //-dk:TODO implement if needed; IOCP does not naturally support generic poll.
+        return ::netexec::detail::submit_result{};
     }
 
     auto cancel(::netexec::detail::io_base* cancel_op, ::netexec::detail::io_base* op) -> void override {

@@ -33,7 +33,7 @@ struct uring_context final : context_base {
     }
     ~uring_context() override { ::io_uring_queue_exit(&ring); }
 
-    auto make_socket(int fd) -> socket_id override { return sockets.insert(fd); }
+    auto make_socket(native_handle_type handle) -> socket_id override { return sockets.insert(handle); }
 
     auto make_socket(int d, int t, int p, ::std::error_code& error) -> socket_id override {
         int fd(::socket(d, t, p));
@@ -41,7 +41,7 @@ struct uring_context final : context_base {
             error = ::std::error_code(errno, ::std::system_category());
             return socket_id::invalid;
         }
-        return make_socket(fd);
+        return make_socket(static_cast<native_handle_type>(fd));
     }
 
     auto release(socket_id id, ::std::error_code& error) -> void override {
@@ -112,7 +112,7 @@ struct uring_context final : context_base {
         return {res, static_cast<io_base*>(completion)};
     }
 
-    auto run_one() -> ::std::size_t override {
+    auto run_one() noexcept -> ::std::size_t override {
         if (auto count = process_task(); count) {
             return count;
         }
@@ -167,6 +167,11 @@ struct uring_context final : context_base {
     auto schedule(task* t) -> void override {
         t->next = tasks;
         tasks   = t;
+    }
+
+    auto poll(poll_operation*) -> submit_result override {
+        //-dk:TODO implement if needed; io_uring does not need a generic poll path.
+        return submit_result{};
     }
 
     auto process_task() -> ::std::size_t {

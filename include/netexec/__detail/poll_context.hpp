@@ -60,7 +60,9 @@ struct netexec::detail::poll_context final : ::netexec::detail::context_base {
     timer_priority_t                                                   d_timeouts;
     ::netexec::detail::context_base::task*                          d_tasks{};
 
-    auto make_socket(int fd) -> ::netexec::detail::socket_id override final { return this->d_sockets.insert(fd); }
+    auto make_socket(::netexec::detail::native_handle_type handle) -> ::netexec::detail::socket_id override final {
+        return this->d_sockets.insert(handle);
+    }
     auto make_socket(int d, int t, int p, ::std::error_code& error) -> ::netexec::detail::socket_id override final {
         // ::socket() returns SOCKET (ULONG_PTR) on Windows and int on POSIX.
         // INVALID_SOCKET / -1 are the respective failure sentinels.
@@ -70,14 +72,14 @@ struct netexec::detail::poll_context final : ::netexec::detail::context_base {
             error = ::std::error_code(sock_errno(), ::std::system_category());
             return ::netexec::detail::socket_id::invalid;
         }
-        return this->make_socket(static_cast<int>(fd)); // narrowing is safe: stored as native_handle_type
+        return this->make_socket(static_cast<::netexec::detail::native_handle_type>(fd));
 #else
         int fd(::socket(d, t, p));
         if (fd < 0) {
             error = ::std::error_code(sock_errno(), ::std::system_category());
             return ::netexec::detail::socket_id::invalid;
         }
-        return this->make_socket(fd);
+        return this->make_socket(static_cast<::netexec::detail::native_handle_type>(fd));
 #endif
     }
 
@@ -147,7 +149,7 @@ struct netexec::detail::poll_context final : ::netexec::detail::context_base {
     auto to_milliseconds(auto duration) -> int {
         return int(::std::chrono::duration_cast<::std::chrono::milliseconds>(duration).count());
     }
-    auto run_one() -> ::std::size_t override final {
+    auto run_one() noexcept -> ::std::size_t override final {
         auto now{::std::chrono::system_clock::now()};
         if (0u < this->process_timeout(now) || 0 < this->process_task()) {
             return 1u;
@@ -253,6 +255,16 @@ struct netexec::detail::poll_context final : ::netexec::detail::context_base {
         tsk->next     = this->d_tasks;
         this->d_tasks = tsk;
     }
+    auto poll(::netexec::detail::context_base::poll_operation* op)
+        -> ::netexec::detail::submit_result override final {
+        op->context = this;
+        op->work    = [](::netexec::detail::context_base&, ::netexec::detail::io_base* o) {
+            auto& cmp(*static_cast<poll_operation*>(o));
+            cmp.complete();
+            return ::netexec::detail::submit_result::submit;
+        };
+        return this->add_outstanding(op);
+    }
     auto accept(::netexec::detail::context_base::accept_operation* completion)
         -> ::netexec::detail::submit_result override final {
         completion->work = [](::netexec::detail::context_base& ctxt, ::netexec::detail::io_base* comp) {
@@ -279,7 +291,7 @@ struct netexec::detail::poll_context final : ::netexec::detail::context_base {
                     // instead of blocking the event loop.
                     // platform.hpp shims fcntl(F_SETFL, O_NONBLOCK) to ioctlsocket(FIONBIO).
                     ::fcntl(static_cast<int>(rc), F_SETFL, O_NONBLOCK);
-                    auto new_id = ctxt.make_socket(static_cast<int>(rc));
+                    auto new_id = ctxt.make_socket(static_cast<::netexec::detail::native_handle_type>(rc));
                     // make_socket() cannot detect the non-blocking state on Windows
                     // (no F_GETFL equivalent), so we inform the context explicitly.
                     static_cast<poll_context&>(ctxt).set_nonblocking(new_id);
@@ -290,7 +302,7 @@ struct netexec::detail::poll_context final : ::netexec::detail::context_base {
 #else
                 int rc = ::accept(ctxt.native_handle(id), ::std::get<0>(cmp).data(), &::std::get<1>(cmp));
                 if (0 <= rc) {
-                    ::std::get<2>(cmp) = ctxt.make_socket(rc);
+                    ::std::get<2>(cmp) = ctxt.make_socket(static_cast<::netexec::detail::native_handle_type>(rc));
                     cmp.complete();
                     return ::netexec::detail::submit_result::ready;
                 } else {
