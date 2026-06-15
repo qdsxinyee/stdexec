@@ -10,6 +10,7 @@
 #include <chrono>
 #include <optional>
 #include <system_error>
+#include <type_traits>
 
 // ----------------------------------------------------------------------------
 
@@ -42,7 +43,10 @@ struct netexec::detail::context_base {
     virtual auto make_socket(int, int, int, ::std::error_code&) -> ::netexec::detail::socket_id          = 0;
 
     // Convenience overload for callers that still pass an int fd.
-    // On POSIX native_handle_type is int; on Windows it widens to uintptr_t.
+    // On POSIX native_handle_type is already int, so this overload is skipped
+    // there to avoid colliding with make_socket(native_handle_type).
+    template <typename = void>
+        requires(!::std::is_same_v<::netexec::detail::native_handle_type, int>)
     auto make_socket(int fd) -> ::netexec::detail::socket_id {
         return this->make_socket(static_cast<::netexec::detail::native_handle_type>(fd));
     }
