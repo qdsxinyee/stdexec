@@ -1,15 +1,9 @@
 // cat_image_server.cpp
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
-// Example TCP server using stdexec + netexec.
+// Example TCP server using stdexec::counting_scope + netexec directly.
 // Accepts connections, reads a minimal HTTP GET request, and replies with a
 // cat image from examples/netexec/data/itcpp.png.
-//
-// This maps the user's pseudo-code to netexec's API:
-//   - netexec::scope  == io_context + counting_scope
-//   - scope.get_context() gives the io_context
-//   - scope.get_token() gives the counting_scope token
-//   - scope.run()     == when_all(context.run(), scope.join())
 
 #include <netexec/net.hpp>
 #include <exec/task.hpp>
@@ -20,7 +14,7 @@
 #include <sstream>
 #include <string>
 
-namespace ex = stdexec;
+namespace ex  = stdexec;
 namespace net = netexec;
 
 // ---------------------------------------------------------------------------
@@ -42,7 +36,7 @@ auto read_file(const char* path) -> std::string {
 auto cat_image_client(auto client) -> exec::task<void> {
     try {
         // Read until we see the end of the HTTP header.
-        char buffer[1024];
+        char        buffer[1024];
         std::string request;
         while (auto n = co_await net::async_receive(client, net::buffer(buffer))) {
             request.append(buffer, n);
@@ -72,9 +66,9 @@ auto cat_image_client(auto client) -> exec::task<void> {
 // ---------------------------------------------------------------------------
 // Accept loop.
 // ---------------------------------------------------------------------------
-auto run_server(net::scope& scope) -> exec::task<void> {
+auto run_server(net::io_context& ctx, stdexec::counting_scope::token token) -> exec::task<void> {
     net::ip::tcp::endpoint endpoint(net::ip::address_v4::any(), 12345);
-    net::ip::tcp::acceptor server(scope.get_context(), endpoint);
+    net::ip::tcp::acceptor server(ctx, endpoint);
 
     std::cout << "cat image server listening on " << endpoint << "\n";
 
@@ -82,9 +76,12 @@ auto run_server(net::scope& scope) -> exec::task<void> {
         auto [stream, address] = co_await net::async_accept(server);
         std::cout << "connection from " << address << "\n";
 
+        auto sched = ctx.get_scheduler();
         ex::spawn(
-            cat_image_client(std::move(stream)) | ex::upon_error([](auto&&) noexcept {}),
-            scope.get_token());
+            ex::write_env(
+                cat_image_client(std::move(stream)) | ex::upon_error([](auto&&) noexcept {}),
+                ex::env{ex::prop{ex::get_scheduler, sched}, ex::prop{ex::get_start_scheduler, sched}}),
+            token);
     }
 }
 
@@ -96,13 +93,24 @@ auto main() -> int {
     std::cerr << std::unitbuf;
 
     try {
-        net::scope scope;
+        net::io_context       ctx;
+        stdexec::counting_scope scope;
+
+        auto scheduler = ctx.get_scheduler();
+
+        auto server_env =
+            ex::env{ex::prop{ex::get_scheduler, scheduler}, ex::prop{ex::get_start_scheduler, scheduler}};
 
         ex::spawn(
-            run_server(scope) | ex::upon_error([](auto&&) noexcept {}),
+            ex::write_env(
+                run_server(ctx, scope.get_token()) | ex::upon_error([](auto&&) noexcept {}),
+                server_env),
             scope.get_token());
 
-        ex::sync_wait(scope.run());
+        // Drive the IO context and the counting scope together.
+        ex::sync_wait(ex::write_env(
+            ex::when_all(ctx.async_run(), scope.join()),
+            server_env));
     } catch (const std::exception& e) {
         std::cerr << "server error: " << e.what() << "\n";
         return 1;

@@ -61,6 +61,7 @@ class netexec::basic_socket_acceptor : public ::netexec::socket_base {
     basic_socket_acceptor(const basic_socket_acceptor&) = delete;
     basic_socket_acceptor(basic_socket_acceptor&& other)
         : ::netexec::socket_base(),
+          d_context(other.d_context),
           d_protocol(other.d_protocol),
           d_id(::std::exchange(other.d_id, ::netexec::detail::socket_id::invalid)) {}
     template <typename OtherProtocol>

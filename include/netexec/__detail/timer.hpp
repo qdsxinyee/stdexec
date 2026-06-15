@@ -63,7 +63,7 @@ struct netexec::detail::resume_at_desc {
         auto events() const { return ::netexec::event_type::none; }
         auto get_scheduler() { return this->d_scheduler; }
         auto set_value(operation&, auto&& receiver) { stdexec::set_value(::std::move(receiver)); }
-        auto submit(auto* base) -> bool {
+        auto submit(auto* base) -> ::netexec::detail::submit_result {
             ::std::get<0>(*base) = this->d_time;
             return this->d_scheduler.resume_at(base);
         }

@@ -47,6 +47,7 @@ foreach(example ${NETEXEC_EXAMPLES})
             /permissive-
             /await:strict
             /utf-8
+            /wd4714  # stdexec internal __forceinline functions may not be inlined
         )
     endif()
 

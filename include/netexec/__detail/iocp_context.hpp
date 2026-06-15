@@ -4,6 +4,8 @@
 #ifndef INCLUDED_BEMAN_NET_DETAIL_IOCP_CONTEXT
 #define INCLUDED_BEMAN_NET_DETAIL_IOCP_CONTEXT
 
+#pragma message("netexec: compiling with IOCP backend")
+
 // ----------------------------------------------------------------------------
 
 #include <netexec/__detail/container.hpp>
@@ -11,6 +13,7 @@
 #include <netexec/__detail/sorted_list.hpp>
 
 #include <MSWSock.h>
+#include <windows.h>
 
 #include <algorithm>
 #include <cassert>
@@ -179,6 +182,22 @@ struct iocp_context final : context_base {
         }
     }
 
+    auto set_nonblocking(SOCKET s) -> void {
+        u_long mode = 1;
+        ::ioctlsocket(s, FIONBIO, &mode);
+    }
+
+    auto skip_sync_completion(SOCKET s) -> void {
+        // FILE_SKIP_COMPLETION_PORT_ON_SUCCESS:
+        //   Do not post a completion packet to the IOCP port when an overlapped
+        //   operation completes synchronously. The result is returned directly
+        //   from WSARecv/WSASend/AcceptEx/ConnectEx.
+        // FILE_SKIP_SET_EVENT_ON_HANDLE:
+        //   We never wait on the event handle, so skip setting it.
+        UCHAR flags = FILE_SKIP_COMPLETION_PORT_ON_SUCCESS | FILE_SKIP_SET_EVENT_ON_HANDLE;
+        ::SetFileCompletionNotificationModes(reinterpret_cast<HANDLE>(s), flags);
+    }
+
     auto process_task() -> ::std::size_t {
         if (tasks) {
             auto* t = tasks;
@@ -198,13 +217,11 @@ struct iocp_context final : context_base {
     }
 
     auto make_socket(native_handle_type handle) -> socket_id override {
-        // Sockets registered into the IOCP context must be blocking so that
-        // overlapped operations queue as WSA_IO_PENDING.
-        {
-            u_long mode = 0;
-            int    rc = ::ioctlsocket(static_cast<SOCKET>(handle), FIONBIO, &mode);
-            (void)rc;
-        }
+        // Sockets used with IOCP are non-blocking. Synchronous completions are
+        // suppressed via SetFileCompletionNotificationModes and handled inline.
+        SOCKET s = static_cast<SOCKET>(handle);
+        set_nonblocking(s);
+        skip_sync_completion(s);
         ++socket_count;
         return sockets.insert(iocp_record{handle, AF_INET6, ::std::make_unique<iocp_socket_data>()});
     }
@@ -216,11 +233,8 @@ struct iocp_context final : context_base {
             return socket_id::invalid;
         }
         associate_with_iocp(s);
-        // IOCP needs blocking sockets so that overlapped operations return
-        // WSA_IO_PENDING instead of WSAEWOULDBLOCK when they cannot complete
-        // immediately.
-        u_long mode = 0;
-        ::ioctlsocket(s, FIONBIO, &mode);
+        set_nonblocking(s);
+        skip_sync_completion(s);
         ++socket_count;
         return sockets.insert(
             iocp_record{static_cast<native_handle_type>(s), d, ::std::make_unique<iocp_socket_data>()});
@@ -292,7 +306,15 @@ struct iocp_context final : context_base {
         if (overlapped_ptr == nullptr) {
             if (!ok) {
                 if (::GetLastError() == WAIT_TIMEOUT) {
-                    return process_timeout(::std::chrono::system_clock::now());
+                    if (process_timeout(::std::chrono::system_clock::now()) > 0) {
+                        return 1u;
+                    }
+                    // A spurious early wake can leave pending timers or work.
+                    // Keep the loop alive while there is still work to do.
+                    if (outstanding > 0 || !timeouts.empty() || socket_count > 0) {
+                        return 1u;
+                    }
+                    return 0u;
                 }
                 return 0u;
             }
@@ -411,13 +433,9 @@ struct iocp_context final : context_base {
             ::setsockopt(data->accept_socket, SOL_SOCKET, SO_UPDATE_ACCEPT_CONTEXT,
                          reinterpret_cast<const char*>(&listen_sock), sizeof(SOCKET));
 
-            // AcceptEx can copy the listening socket's non-blocking state.  Ensure
-            // the accepted socket is blocking so overlapped I/O queues properly.
-            {
-                u_long mode = 0;
-                int    rc = ::ioctlsocket(data->accept_socket, FIONBIO, &mode);
-                (void)rc;
-            }
+            // The accepted socket was already associated with the IOCP port and
+            // configured for non-blocking operation with skipped synchronous
+            // completions; nothing more to do here.
 
             ::std::get<0>(*aop) = endpoint(remote_addr, static_cast<::socklen_t>(remote_len));
             ::std::get<1>(*aop) = static_cast<::socklen_t>(remote_len);
@@ -441,14 +459,22 @@ struct iocp_context final : context_base {
                                           &bytes,
                                           static_cast<LPOVERLAPPED>(raw));
 
-        if (ok || ::WSAGetLastError() == ERROR_IO_PENDING) {
-            raw->result = ok ? static_cast<int>(bytes) : 0;
+        if (ok) {
+            // Synchronous completion. Because we use
+            // FILE_SKIP_COMPLETION_PORT_ON_SUCCESS, no IOCP packet will be
+            // posted. Handle the completion inline.
+            raw->result = static_cast<int>(bytes);
+            op->work(*this, op);
+            return submit_result::ready;
+        }
+
+        int err = ::WSAGetLastError();
+        if (err == ERROR_IO_PENDING) {
             this->kept_accept_data.push_back(::std::move(data));
             ++outstanding;
             return submit_result::submit;
         }
 
-        int err = ::WSAGetLastError();
         ::closesocket(data->accept_socket);
         data->accept_socket = INVALID_SOCKET;
         op->error(::std::error_code(err, ::std::system_category()));
@@ -493,14 +519,8 @@ struct iocp_context final : context_base {
             auto h = static_cast<SOCKET>(ctx.native_handle(io->id));
             ::setsockopt(h, SOL_SOCKET, SO_UPDATE_CONNECT_CONTEXT, static_cast<const char*>(nullptr), 0);
 
-            // ConnectEx may leave the socket in non-blocking mode.  Force it back
-            // to blocking so overlapped receive/send queue instead of returning
-            // WSAEWOULDBLOCK.
-            {
-                u_long mode = 0;
-                ::ioctlsocket(h, FIONBIO, &mode);
-            }
-
+            // The socket was already made non-blocking and configured to skip
+            // synchronous completion notifications when it was created.
             io->complete();
             return submit_result::ready;
         };
@@ -508,12 +528,17 @@ struct iocp_context final : context_base {
         DWORD bytes{};
         BOOL  ok = connect_ex_fn(handle, ep.data(), ep.size(), nullptr, 0, &bytes, static_cast<LPOVERLAPPED>(&data));
 
-        if (!ok) {
-            int err = ::WSAGetLastError();
-            if (err != ERROR_IO_PENDING) {
-                op->error(::std::error_code(err, ::std::system_category()));
-                return submit_result::error;
-            }
+        if (ok) {
+            // Synchronous completion. With FILE_SKIP_COMPLETION_PORT_ON_SUCCESS
+            // no IOCP packet is posted; finish inline.
+            op->work(*this, op);
+            return submit_result::ready;
+        }
+
+        int err = ::WSAGetLastError();
+        if (err != ERROR_IO_PENDING) {
+            op->error(::std::error_code(err, ::std::system_category()));
+            return submit_result::error;
         }
 
         ++outstanding;
@@ -564,9 +589,16 @@ struct iocp_context final : context_base {
         int   rc = ::WSARecv(handle, &data.wsabuf, 1, &bytes, &data.flags, static_cast<LPOVERLAPPED>(&data), nullptr);
 
         if (rc == 0) {
+            // Synchronous completion. With FILE_SKIP_COMPLETION_PORT_ON_SUCCESS
+            // no IOCP packet is posted, so complete inline.
             data.result = static_cast<int>(bytes);
-        } else if (::WSAGetLastError() != WSA_IO_PENDING) {
-            op->error(::std::error_code(::WSAGetLastError(), ::std::system_category()));
+            op->work(*this, op);
+            return submit_result::ready;
+        }
+
+        int err = ::WSAGetLastError();
+        if (err != WSA_IO_PENDING) {
+            op->error(::std::error_code(err, ::std::system_category()));
             return submit_result::error;
         }
 
@@ -618,9 +650,16 @@ struct iocp_context final : context_base {
         int   rc    = ::WSASend(handle, &data.wsabuf, 1, &bytes, flags, static_cast<LPOVERLAPPED>(&data), nullptr);
 
         if (rc == 0) {
+            // Synchronous completion. With FILE_SKIP_COMPLETION_PORT_ON_SUCCESS
+            // no IOCP packet is posted, so complete inline.
             data.result = static_cast<int>(bytes);
-        } else if (::WSAGetLastError() != WSA_IO_PENDING) {
-            op->error(::std::error_code(::WSAGetLastError(), ::std::system_category()));
+            op->work(*this, op);
+            return submit_result::ready;
+        }
+
+        int err = ::WSAGetLastError();
+        if (err != WSA_IO_PENDING) {
+            op->error(::std::error_code(err, ::std::system_category()));
             return submit_result::error;
         }
 

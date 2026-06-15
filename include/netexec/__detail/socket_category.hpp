@@ -17,7 +17,7 @@ auto socket_category() noexcept -> const ::std::error_category&;
 
 enum class netexec::socket_errc : int { already_open = 1, not_found };
 
-auto netexec::socket_category() noexcept -> const ::std::error_category& {
+inline auto netexec::socket_category() noexcept -> const ::std::error_category& {
     struct category : ::std::error_category {
         auto name() const noexcept -> const char* override final { return "socket"; }
         auto message(int error) const -> ::std::string override final {

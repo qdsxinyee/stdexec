@@ -64,7 +64,6 @@ auto timeout(auto scheduler, auto duration, auto sender) {
         net::resume_after(scheduler, duration)
         | ex::then([]() -> std::size_t {
             throw std::system_error(std::make_error_code(std::errc::timed_out));
-            return 0;
           });
 
     return exec::when_any(std::move(sender), std::move(timer_branch));
