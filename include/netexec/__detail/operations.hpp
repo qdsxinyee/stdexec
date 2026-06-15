@@ -64,6 +64,9 @@ struct netexec::detail::accept_desc {
         }
         auto submit(auto* base) -> ::netexec::detail::submit_result {
             ::std::get<1>(*base) = sizeof(::std::get<0>(*base));
+            // Pre-engage the optional socket_id so that compilers don't warn
+            // about an uninitialized value on the success path.
+            ::std::get<2>(*base) = ::netexec::detail::socket_id::invalid;
             return this->get_scheduler().accept(base);
         }
     };

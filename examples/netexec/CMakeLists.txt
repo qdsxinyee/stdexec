@@ -49,6 +49,12 @@ foreach(example ${NETEXEC_EXAMPLES})
             /utf-8
             /wd4714  # stdexec internal __forceinline functions may not be inlined
         )
+    else()
+        # GCC is prone to false-positive -Wmaybe-uninitialized warnings with
+        # stdexec coroutine senders (e.g. structured bindings from async_accept).
+        target_compile_options(${target} PRIVATE
+            -Wno-maybe-uninitialized
+        )
     endif()
 
     # Copy the shared data/ directory next to the executable so HTTP examples
