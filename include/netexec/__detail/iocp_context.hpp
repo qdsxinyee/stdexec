@@ -198,6 +198,13 @@ struct iocp_context final : context_base {
     }
 
     auto make_socket(native_handle_type handle) -> socket_id override {
+        // Sockets registered into the IOCP context must be blocking so that
+        // overlapped operations queue as WSA_IO_PENDING.
+        {
+            u_long mode = 0;
+            int    rc = ::ioctlsocket(static_cast<SOCKET>(handle), FIONBIO, &mode);
+            (void)rc;
+        }
         ++socket_count;
         return sockets.insert(iocp_record{handle, AF_INET6, ::std::make_unique<iocp_socket_data>()});
     }
@@ -209,6 +216,11 @@ struct iocp_context final : context_base {
             return socket_id::invalid;
         }
         associate_with_iocp(s);
+        // IOCP needs blocking sockets so that overlapped operations return
+        // WSA_IO_PENDING instead of WSAEWOULDBLOCK when they cannot complete
+        // immediately.
+        u_long mode = 0;
+        ::ioctlsocket(s, FIONBIO, &mode);
         ++socket_count;
         return sockets.insert(
             iocp_record{static_cast<native_handle_type>(s), d, ::std::make_unique<iocp_socket_data>()});
@@ -399,6 +411,14 @@ struct iocp_context final : context_base {
             ::setsockopt(data->accept_socket, SOL_SOCKET, SO_UPDATE_ACCEPT_CONTEXT,
                          reinterpret_cast<const char*>(&listen_sock), sizeof(SOCKET));
 
+            // AcceptEx can copy the listening socket's non-blocking state.  Ensure
+            // the accepted socket is blocking so overlapped I/O queues properly.
+            {
+                u_long mode = 0;
+                int    rc = ::ioctlsocket(data->accept_socket, FIONBIO, &mode);
+                (void)rc;
+            }
+
             ::std::get<0>(*aop) = endpoint(remote_addr, static_cast<::socklen_t>(remote_len));
             ::std::get<1>(*aop) = static_cast<::socklen_t>(remote_len);
             SOCKET accepted_socket = data->accept_socket;
@@ -472,6 +492,14 @@ struct iocp_context final : context_base {
 
             auto h = static_cast<SOCKET>(ctx.native_handle(io->id));
             ::setsockopt(h, SOL_SOCKET, SO_UPDATE_CONNECT_CONTEXT, static_cast<const char*>(nullptr), 0);
+
+            // ConnectEx may leave the socket in non-blocking mode.  Force it back
+            // to blocking so overlapped receive/send queue instead of returning
+            // WSAEWOULDBLOCK.
+            {
+                u_long mode = 0;
+                ::ioctlsocket(h, FIONBIO, &mode);
+            }
 
             io->complete();
             return submit_result::ready;

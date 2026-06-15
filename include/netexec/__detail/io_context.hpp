@@ -14,9 +14,9 @@
 #include <netexec/__detail/context_base.hpp>
 #include <netexec/__detail/internet.hpp>
 #include <netexec/__detail/io_context_scheduler.hpp>
-#ifdef BEMAN_NET_USE_URING
+#ifdef NET_EXEC_USE_URING
 #include <netexec/__detail/uring_context.hpp>
-#elif defined(BEMAN_NET_USE_IOCP)
+#elif defined(NET_EXEC_USE_IOCP)
 #include <netexec/__detail/iocp_context.hpp>
 #else
 #include <netexec/__detail/poll_context.hpp>
@@ -38,9 +38,9 @@ class io_context;
 
 class netexec::io_context {
   private:
-#ifdef BEMAN_NET_USE_URING
+#ifdef NET_EXEC_USE_URING
     ::std::unique_ptr<::netexec::detail::context_base> d_owned{new ::netexec::detail::uring_context()};
-#elif defined(BEMAN_NET_USE_IOCP)
+#elif defined(NET_EXEC_USE_IOCP)
     ::std::unique_ptr<::netexec::detail::context_base> d_owned{new ::netexec::detail::iocp_context()};
 #else
     ::std::unique_ptr<::netexec::detail::context_base> d_owned{new ::netexec::detail::poll_context()};

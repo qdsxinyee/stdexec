@@ -106,3 +106,6 @@ if(STDEXEC_ENABLE_ASIO)
       PRIVATE STDEXEC::asioexec
               $<TARGET_NAME_IF_EXISTS:TBB::tbb>)
 endif()
+
+# netexec networking examples (beman/net ported to stdexec)
+add_subdirectory(netexec)

@@ -391,7 +391,9 @@ struct netexec::detail::poll_context final : ::netexec::detail::context_base {
                         completion.error(::std::error_code(sock_errno(), ::std::system_category()));
                         return ::netexec::detail::submit_result::error;
                     case ECONNRESET:
+#ifndef _MSC_VER
                     case EPIPE:
+#endif
                         ::std::get<2>(completion) = 0u;
                         completion.complete();
                         return ::netexec::detail::submit_result::ready;
@@ -421,7 +423,9 @@ struct netexec::detail::poll_context final : ::netexec::detail::context_base {
                         completion.error(::std::error_code(sock_errno(), ::std::system_category()));
                         return ::netexec::detail::submit_result::error;
                     case ECONNRESET:
+#ifndef _MSC_VER
                     case EPIPE:
+#endif
                         ::std::get<2>(completion) = 0u;
                         completion.complete();
                         return ::netexec::detail::submit_result::ready;

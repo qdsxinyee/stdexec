@@ -55,27 +55,22 @@ inline int sock_errno() noexcept { return ::WSAGetLastError(); }
 
 // Map POSIX errno names to their closest Winsock equivalents so that
 // switch/case error handling in poll_context compiles unchanged.
-#ifndef EWOULDBLOCK
+// We #undef first because the C runtime may have already defined these
+// macros to CRT errno values that differ from the Winsock error codes.
+#undef EWOULDBLOCK
 #define EWOULDBLOCK WSAEWOULDBLOCK
-#endif
-#ifndef EINPROGRESS
+#undef EINPROGRESS
 #define EINPROGRESS WSAEINPROGRESS
-#endif
-#ifndef ECONNRESET
+#undef ECONNRESET
 #define ECONNRESET WSAECONNRESET
-#endif
-#ifndef EPIPE
+#undef EPIPE
 #define EPIPE WSAECONNRESET // no direct equivalent
-#endif
-#ifndef EINTR
+#undef EINTR
 #define EINTR WSAEINTR
-#endif
-#ifndef EAGAIN
+#undef EAGAIN
 #define EAGAIN WSAEWOULDBLOCK
-#endif
-#ifndef ECONNREFUSED
+#undef ECONNREFUSED
 #define ECONNREFUSED WSAECONNREFUSED
-#endif
 
 // ---- iovec -----------------------------------------------------------------
 // Mirrors POSIX struct iovec exactly (iov_base / iov_len field names).
