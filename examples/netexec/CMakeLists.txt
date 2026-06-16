@@ -27,6 +27,8 @@ set(NETEXEC_EXAMPLES
     taps
     cat_image_server
     simple_echo_server
+    counting_scope_server
+    let_async_scope_server
 )
 
 foreach(example ${NETEXEC_EXAMPLES})

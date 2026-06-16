@@ -16,6 +16,7 @@ set(netexec_test_sources
     test_netexec_iocp_specific.cpp
     test_netexec_poll_specific.cpp
     test_netexec_udp.cpp
+    test_let_async_scope.cpp
 )
 
 add_executable(test.netexec ${netexec_test_sources})
