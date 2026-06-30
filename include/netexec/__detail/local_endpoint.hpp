@@ -4,6 +4,7 @@
 #ifndef INCLUDED_INCLUDE_BEMAN_NET_DETAIL_LOCAL_ENDPOINT
 #define INCLUDED_INCLUDE_BEMAN_NET_DETAIL_LOCAL_ENDPOINT
 
+#include <cstdint>
 #include <string>
 
 // ----------------------------------------------------------------------------

@@ -4,6 +4,9 @@
 #ifndef INCLUDED_INCLUDE_BEMAN_NET_DETAIL_REMOTE_ENDPOINT
 #define INCLUDED_INCLUDE_BEMAN_NET_DETAIL_REMOTE_ENDPOINT
 
+#include <cstdint>
+#include <string>
+
 // ----------------------------------------------------------------------------
 
 namespace netexec::detail {
