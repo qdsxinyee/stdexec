@@ -1,44 +1,55 @@
 // taps.cpp
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+//
+// Example of the high-level TAPS API in netexec::net.
+// TLS is explicitly disabled because it is not yet implemented.
 
 #include <netexec/net.hpp>
 #include <exec/task.hpp>
 #include <stdexec/execution.hpp>
 #include <iostream>
-#include <system_error>
 #include <string>
 
 namespace ex = stdexec;
-namespace net = netexec;
+namespace net = netexec::net;
 
 int main(int, char*[]) {
     std::cout << std::unitbuf;
-    net::scope scope;
 
-    std::cout << "spawning\n";
-    ex::spawn(
-        [&scope]() -> exec::task<void> {
-            try {
-                net::preconnection pre(net::remote_endpoint().with_hostname("localhost").with_port(12345));
-                auto socket = co_await net::initiate(pre, scope.get_context());
+    try {
+        net::io_context ctx;
 
-                std::string request = "GET / HTTP/1.1\r\nHost: example.com\r\nConnection: close\r\n\r\n";
-                std::cout << "async_send\n";
-                co_await net::async_send(socket, net::buffer(request));
+        auto remote = net::env{
+            net::hostname("localhost"),
+            net::port(12345),
+            net::secure(false) // TLS not implemented in Phase 3
+        };
+        net::preconnection pre(remote);
 
-                char buffer[1024];
-                std::cout << "reading\n";
-                for (std::size_t n; (n = co_await net::async_receive(socket, net::buffer(buffer)));) {
-                    std::cout << "read n=" << n << "\n";
-                    std::cout.write(buffer, static_cast<std::streamsize>(n));
-                }
-            } catch (const std::exception& e) {
-                std::cout << "exception: " << e.what() << "\n";
-            }
-        }() | ex::upon_error([](auto&&) noexcept {}) | ex::then([]() noexcept { std::cout << "running connection DONE!\n"; }),
-        scope.get_token());
+        auto task = [&]() -> exec::task<void> {
+            auto conn = co_await net::async_initiate(pre, ctx);
 
-    std::cout << "spawned\n";
+            std::string request =
+                "GET / HTTP/1.1\r\n"
+                "Host: example.com\r\n"
+                "Connection: close\r\n"
+                "\r\n";
 
-    ex::sync_wait(scope.run());
+            std::cout << "sending request\n";
+            co_await net::async_send(conn, net::message{request});
+
+            std::cout << "reading response\n";
+            auto reply = co_await net::async_receive(conn);
+            std::cout << "received " << reply.size() << " bytes\n";
+            std::cout.write(reinterpret_cast<const char*>(reply.data()),
+                            static_cast<std::streamsize>(reply.size()));
+        }() | ex::upon_error([](auto&& e) noexcept {
+            std::cout << "connection error\n";
+            (void)e;
+        });
+
+        ex::sync_wait(std::move(task));
+    } catch (const std::exception& e) {
+        std::cout << "exception: " << e.what() << "\n";
+    }
 }

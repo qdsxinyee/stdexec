@@ -9,66 +9,66 @@
 namespace {
 
 auto echo_server(net::ip::tcp::acceptor acceptor, std::string* received, std::size_t expected) -> exec::task<void> {
-    auto [client, addr] = co_await net::async_accept(acceptor);
+    auto [client, addr] = co_await net::ip::tcp::async_accept(acceptor);
     std::error_code ec;
     acceptor.close(ec);
 
     received->clear();
     char buffer[64];
     while (received->size() < expected) {
-        auto n = co_await net::async_receive(client, net::buffer(buffer));
+        auto n = co_await net::ip::tcp::async_receive_some(client, net::buffer(buffer));
         if (n == 0) {
             break;
         }
         received->append(buffer, n);
     }
 
-    co_await net::async_send(client, net::const_buffer(received->data(), received->size()));
+    co_await net::ip::tcp::async_send_some(client, net::const_buffer(received->data(), received->size()));
 }
 
-auto echo_client(net::scope& scope, std::uint16_t port, std::string* response) -> exec::task<void> {
+auto echo_client(netexec::scope& scope, std::uint16_t port, std::string* response) -> exec::task<void> {
     net::ip::tcp::socket socket(scope.get_context(), netexec_test::make_server_endpoint(port));
-    co_await net::async_connect(socket);
+    co_await net::ip::tcp::async_connect(socket);
 
-    co_await net::async_send(socket, net::const_buffer("hello", 5));
+    co_await net::ip::tcp::async_send_some(socket, net::const_buffer("hello", 5));
 
     char buffer[64];
-    auto n = co_await net::async_receive(socket, net::buffer(buffer));
+    auto n = co_await net::ip::tcp::async_receive_some(socket, net::buffer(buffer));
     response->assign(buffer, n);
 }
 
-auto multiple_send_client(net::scope& scope, std::uint16_t port, std::string* response) -> exec::task<void> {
+auto multiple_send_client(netexec::scope& scope, std::uint16_t port, std::string* response) -> exec::task<void> {
     net::ip::tcp::socket socket(scope.get_context(), netexec_test::make_server_endpoint(port));
-    co_await net::async_connect(socket);
+    co_await net::ip::tcp::async_connect(socket);
 
-    co_await net::async_send(socket, net::const_buffer("abc", 3));
-    co_await net::async_send(socket, net::const_buffer("def", 3));
-    co_await net::async_send(socket, net::const_buffer("ghi", 3));
+    co_await net::ip::tcp::async_send_some(socket, net::const_buffer("abc", 3));
+    co_await net::ip::tcp::async_send_some(socket, net::const_buffer("def", 3));
+    co_await net::ip::tcp::async_send_some(socket, net::const_buffer("ghi", 3));
 
     char buffer[64];
-    auto n = co_await net::async_receive(socket, net::buffer(buffer));
+    auto n = co_await net::ip::tcp::async_receive_some(socket, net::buffer(buffer));
     response->assign(buffer, n);
 }
 
 auto close_after_accept(net::ip::tcp::acceptor acceptor) -> exec::task<void> {
-    auto [client, addr] = co_await net::async_accept(acceptor);
+    auto [client, addr] = co_await net::ip::tcp::async_accept(acceptor);
     std::error_code ec;
     acceptor.close(ec);
     // `client` is destroyed on return, closing the connection gracefully.
 }
 
-auto receive_until_close(net::scope& scope, std::uint16_t port, std::size_t* received) -> exec::task<void> {
+auto receive_until_close(netexec::scope& scope, std::uint16_t port, std::size_t* received) -> exec::task<void> {
     net::ip::tcp::socket socket(scope.get_context(), netexec_test::make_server_endpoint(port));
-    co_await net::async_connect(socket);
+    co_await net::ip::tcp::async_connect(socket);
 
     char buffer[64];
-    *received = co_await net::async_receive(socket, net::buffer(buffer));
+    *received = co_await net::ip::tcp::async_receive_some(socket, net::buffer(buffer));
 }
 
 } // namespace
 
 TEST_CASE("netexec - send and receive echo", "[netexec][send_receive]") {
-    net::scope scope;
+    netexec::scope scope;
     auto       port = netexec_test::next_port();
     net::ip::tcp::acceptor acceptor(scope.get_context(), netexec_test::make_server_endpoint(port));
     std::string received;
@@ -88,7 +88,7 @@ TEST_CASE("netexec - send and receive echo", "[netexec][send_receive]") {
 }
 
 TEST_CASE("netexec - receive zero bytes on graceful close", "[netexec][send_receive]") {
-    net::scope scope;
+    netexec::scope scope;
     auto       port = netexec_test::next_port();
     net::ip::tcp::acceptor acceptor(scope.get_context(), netexec_test::make_server_endpoint(port));
     std::size_t received = 42;
@@ -106,7 +106,7 @@ TEST_CASE("netexec - receive zero bytes on graceful close", "[netexec][send_rece
 }
 
 TEST_CASE("netexec - multiple sends are received", "[netexec][send_receive]") {
-    net::scope scope;
+    netexec::scope scope;
     auto       port = netexec_test::next_port();
     net::ip::tcp::acceptor acceptor(scope.get_context(), netexec_test::make_server_endpoint(port));
     std::string received;

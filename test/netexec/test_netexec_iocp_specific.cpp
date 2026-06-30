@@ -12,32 +12,32 @@
 namespace {
 
 auto iocp_echo_server(net::ip::tcp::acceptor acceptor, std::string* received) -> exec::task<void> {
-    auto [client, addr] = co_await net::async_accept(acceptor);
+    auto [client, addr] = co_await net::ip::tcp::async_accept(acceptor);
     std::error_code ec;
     acceptor.close(ec);
 
     char buf[64];
-    auto n = co_await net::async_receive(client, net::buffer(buf));
+    auto n = co_await net::ip::tcp::async_receive_some(client, net::buffer(buf));
     received->assign(buf, n);
 
-    co_await net::async_send(client, net::const_buffer(received->data(), received->size()));
+    co_await net::ip::tcp::async_send_some(client, net::const_buffer(received->data(), received->size()));
 }
 
-auto iocp_echo_client(net::scope& scope, std::uint16_t port) -> exec::task<void> {
+auto iocp_echo_client(netexec::scope& scope, std::uint16_t port) -> exec::task<void> {
     net::ip::tcp::socket socket(scope.get_context(), netexec_test::make_server_endpoint(port));
-    co_await (net::async_connect(socket) | ex::upon_error([](auto&&) {}));
+    co_await (net::ip::tcp::async_connect(socket) | ex::upon_error([](auto&&) {}));
 
-    co_await net::async_send(socket, net::const_buffer("iocp", 4));
+    co_await net::ip::tcp::async_send_some(socket, net::const_buffer("iocp", 4));
 
     char buf[64];
-    auto n = co_await net::async_receive(socket, net::buffer(buf));
+    auto n = co_await net::ip::tcp::async_receive_some(socket, net::buffer(buf));
     CHECK(std::string_view(buf, n) == "iocp");
 }
 
 } // namespace
 
 TEST_CASE("netexec iocp - echo works", "[netexec][iocp]") {
-    net::scope scope;
+    netexec::scope scope;
     auto       port = netexec_test::next_port();
     net::ip::tcp::acceptor acceptor(scope.get_context(), netexec_test::make_server_endpoint(port));
     std::string received;
@@ -55,7 +55,7 @@ TEST_CASE("netexec iocp - echo works", "[netexec][iocp]") {
 }
 
 TEST_CASE("netexec iocp - timer fires", "[netexec][iocp]") {
-    net::scope scope;
+    netexec::scope scope;
     bool       fired = false;
 
     ex::spawn(

@@ -6,7 +6,7 @@
 #include <chrono>
 
 TEST_CASE("netexec - resume_after fires", "[netexec][timer]") {
-    net::scope scope;
+    netexec::scope scope;
     bool       fired = false;
     auto       start = std::chrono::steady_clock::now();
 
@@ -24,7 +24,7 @@ TEST_CASE("netexec - resume_after fires", "[netexec][timer]") {
 }
 
 TEST_CASE("netexec - resume_at fires", "[netexec][timer]") {
-    net::scope scope;
+    netexec::scope scope;
     bool       fired = false;
     auto       at = std::chrono::system_clock::now() + 20ms;
 
@@ -39,7 +39,7 @@ TEST_CASE("netexec - resume_at fires", "[netexec][timer]") {
 }
 
 TEST_CASE("netexec - when_any timeout beats slow timer", "[netexec][timer]") {
-    net::scope scope;
+    netexec::scope scope;
     bool       fast_fired = false;
 
     auto slow = net::resume_after(scope.get_scheduler(), 10s)

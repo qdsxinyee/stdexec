@@ -15,7 +15,7 @@
 #include <string>
 
 namespace ex  = stdexec;
-namespace net = netexec;
+namespace net = netexec::net;
 
 // ---------------------------------------------------------------------------
 // Read the whole contents of a binary file into a std::string.
@@ -38,7 +38,7 @@ auto cat_image_client(auto client) -> exec::task<void> {
         // Read until we see the end of the HTTP header.
         char        buffer[1024];
         std::string request;
-        while (auto n = co_await net::async_receive(client, net::buffer(buffer))) {
+        while (auto n = co_await net::ip::tcp::async_receive_some(client, net::buffer(buffer))) {
             request.append(buffer, n);
             if (request.find("\r\n\r\n") != std::string::npos) {
                 break;
@@ -57,7 +57,7 @@ auto cat_image_client(auto client) -> exec::task<void> {
                  << body;
 
         auto response_str = response.str();
-        co_await net::async_send(client, net::buffer(response_str));
+        co_await net::ip::tcp::async_send_some(client, net::buffer(response_str));
     } catch (const std::exception& e) {
         std::cerr << "client error: " << e.what() << "\n";
     }
@@ -73,7 +73,7 @@ auto run_server(net::io_context& ctx, stdexec::counting_scope::token token) -> e
     std::cout << "cat image server listening on " << endpoint << "\n";
 
     while (true) {
-        auto [stream, address] = co_await net::async_accept(server);
+        auto [stream, address] = co_await net::ip::tcp::async_accept(server);
         std::cout << "connection from " << address << "\n";
 
         auto sched = ctx.get_scheduler();

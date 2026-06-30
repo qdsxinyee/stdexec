@@ -8,15 +8,15 @@
 #include <string_view>
 
 namespace ex = stdexec;
-namespace net = netexec;
+namespace net = netexec::net;
 
 auto make_client(auto client) -> exec::task<void> {
     try {
         char buffer[8];
-        while (auto size = co_await net::async_receive(client, net::buffer(buffer))) {
+        while (auto size = co_await net::ip::tcp::async_receive_some(client, net::buffer(buffer))) {
             std::string_view message(buffer, size);
             std::cout << "received<" << size << ">(" << message << ")\n";
-            auto ssize = co_await net::async_send(client, net::const_buffer(buffer, size));
+            auto ssize = co_await net::ip::tcp::async_send_some(client, net::const_buffer(buffer, size));
             std::cout << "sent<" << ssize << "/" << message.size() << ">(" << std::string_view(buffer, ssize) << ")\n";
         }
         std::cout << "client done\n";
@@ -31,15 +31,15 @@ auto main() -> int {
     std::cout << "example server\n";
 
     try {
-        net::scope scope;
+        netexec::scope scope;
 
         ex::spawn(
-            [](net::scope& scp) -> exec::task<void> {
+            [](netexec::scope& scp) -> exec::task<void> {
                 net::ip::tcp::endpoint endpoint(net::ip::address_v4::any(), 12345);
                 net::ip::tcp::acceptor acceptor(scp.get_context(), endpoint);
 
                 while (true) {
-                    auto [stream, ep] = co_await net::async_accept(acceptor);
+                    auto [stream, ep] = co_await net::ip::tcp::async_accept(acceptor);
                     std::cout << "received connection from " << ep << "\n";
                     ex::spawn(make_client(std::move(stream)) | ex::upon_error([](auto&&) noexcept {}),
                               scp.get_token());

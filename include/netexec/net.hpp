@@ -5,8 +5,8 @@
 // Usage:
 //   #include <netexec/net.hpp>     // everything
 // Or pick specific headers:
-//   #include <netexec/io_context.hpp>
-//   #include <netexec/socket.hpp>
+//   #include <netexec/net/io_context.hpp>
+//   #include <netexec/net/ip/tcp/socket.hpp>
 //   etc.
 #pragma once
 
@@ -36,6 +36,7 @@
 #include <exception>
 #include <stdexcept>
 
+// Implementation details required by the public netexec::net layer.
 #include <netexec/__detail/basic_socket.hpp>
 #include <netexec/__detail/basic_socket_acceptor.hpp>
 #include <netexec/__detail/basic_stream_socket.hpp>
@@ -54,13 +55,15 @@
 #include <netexec/__detail/stop_token.hpp>
 #include <netexec/__detail/timer.hpp>
 #include <netexec/__detail/scope.hpp>
-#include <netexec/__detail/initiate.hpp>
-#include <netexec/__detail/into_expected.hpp>
-#include <netexec/__detail/repeat_effect_until.hpp>
-#include <netexec/__detail/listen.hpp>
-#include <netexec/__detail/local_endpoint.hpp>
-#include <netexec/__detail/preconnection.hpp>
-#include <netexec/__detail/remote_endpoint.hpp>
-#include <netexec/__detail/rendezvous.hpp>
-#include <netexec/__detail/transport_preference.hpp>
 
+// Public netexec::net layer (two-layer API).
+#include <netexec/net/io_context.hpp>
+#include <netexec/net/buffer.hpp>
+#include <netexec/net/timer.hpp>
+#include <netexec/net/properties.hpp>
+#include <netexec/net/preconnection.hpp>
+#include <netexec/net/message.hpp>
+#include <netexec/net/operations.hpp>
+#include <netexec/net/ip/address.hpp>
+#include <netexec/net/ip/tcp/socket.hpp>
+#include <netexec/net/ip/tcp/operations.hpp>

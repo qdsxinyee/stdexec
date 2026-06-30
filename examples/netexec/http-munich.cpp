@@ -12,7 +12,7 @@
 #include <unordered_map>
 
 namespace ex = stdexec;
-namespace net = netexec;
+namespace net = netexec::net;
 
 std::unordered_map<std::string, std::string> files{
     {"/", "data/index-munich.html"},
@@ -24,7 +24,7 @@ std::unordered_map<std::string, std::string> files{
 auto run_client(auto stream) -> exec::task<void> {
     std::cout << "started client\n";
     char buffer[1000];
-    while (std::size_t n = co_await net::async_receive(stream, net::buffer(buffer))) {
+    while (std::size_t n = co_await net::ip::tcp::async_receive_some(stream, net::buffer(buffer))) {
         std::string request(buffer, n);
         std::istringstream in(request);
         std::string        method, url, version;
@@ -41,7 +41,7 @@ auto run_client(auto stream) -> exec::task<void> {
                 << data;
 
             std::string response = out.str();
-            co_await net::async_send(stream, net::buffer(response));
+            co_await net::ip::tcp::async_send_some(stream, net::buffer(response));
         }
     }
     std::cout << "client done\n";
@@ -50,15 +50,15 @@ auto run_client(auto stream) -> exec::task<void> {
 auto main() -> int {
     std::cout << std::unitbuf;
 
-    net::scope scope;
+    netexec::scope scope;
     net::ip::tcp::endpoint ep(net::ip::address_v4::any(), 12345);
     net::ip::tcp::acceptor server(scope.get_context(), ep);
 
     ex::spawn(
-        [](net::scope& scp, auto& svr) -> exec::task<void> {
+        [](netexec::scope& scp, auto& svr) -> exec::task<void> {
             while (true) {
                 std::cout << "ready to receive a client\n";
-                auto [client, addr] = co_await net::async_accept(svr);
+                auto [client, addr] = co_await net::ip::tcp::async_accept(svr);
                 std::cout << "received connection from " << addr << "\n";
                 ex::spawn(run_client(std::move(client)) | ex::upon_error([](auto&&) noexcept {}),
                           scp.get_token());

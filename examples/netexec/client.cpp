@@ -8,20 +8,20 @@
 #include <string_view>
 
 namespace ex = stdexec;
-namespace net = netexec;
+namespace net = netexec::net;
 
 auto main() -> int {
     std::cout << std::unitbuf;
     std::cerr << std::unitbuf;
-    net::scope scope;
+    netexec::scope scope;
 
     ex::spawn(
-        [](net::scope& scp) -> exec::task<void> {
+        [](netexec::scope& scp) -> exec::task<void> {
             try {
                 net::ip::tcp::endpoint ep(net::ip::address_v4::loopback(), 12345);
                 net::ip::tcp::socket   client(scp.get_context(), ep);
 
-                auto connected = co_await (net::async_connect(client) |
+                auto connected = co_await (net::ip::tcp::async_connect(client) |
                                            ex::then([](auto&&...) { return true; }) |
                                            ex::upon_error([](auto&&) { return false; }));
                 if (!connected) {
@@ -31,10 +31,10 @@ auto main() -> int {
                 std::cout << "connected\n";
 
                 char message[] = "hello, world\n";
-                co_await net::async_send(client, net::buffer(message));
+                co_await net::ip::tcp::async_send_some(client, net::buffer(message));
 
                 char buffer[20];
-                while (auto size = co_await net::async_receive(client, net::buffer(buffer))) {
+                while (auto size = co_await net::ip::tcp::async_receive_some(client, net::buffer(buffer))) {
                     std::string_view response(buffer, size);
                     std::cout << "received='" << response << "'\n";
                     if (response.find('\n') != response.npos) {

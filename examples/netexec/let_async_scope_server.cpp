@@ -17,14 +17,14 @@
 #include <string>
 
 namespace ex  = stdexec;
-namespace net = netexec;
+namespace net = netexec::net;
 
 // Handle one client: read bytes and echo them back until the peer closes.
 auto echo_client(auto client) -> exec::task<void> {
     try {
         char buffer[64];
-        while (auto n = co_await net::async_receive(client, net::buffer(buffer))) {
-            co_await net::async_send(client, net::const_buffer(buffer, n));
+        while (auto n = co_await net::ip::tcp::async_receive_some(client, net::buffer(buffer))) {
+            co_await net::ip::tcp::async_send_some(client, net::const_buffer(buffer, n));
         }
         std::cout << "client disconnected\n";
     } catch (const std::exception& e) {
@@ -41,7 +41,7 @@ auto accept_client(net::io_context& ctx, auto token, auto& env) -> exec::task<vo
 
     std::cout << "let_async_scope echo server listening on " << endpoint << "\n";
 
-    auto [stream, address] = co_await net::async_accept(acceptor);
+    auto [stream, address] = co_await net::ip::tcp::async_accept(acceptor);
     std::cout << "connection from " << address << "\n";
 
     // Spawned senders that need a scheduler (exec::task in this case) are

@@ -15,7 +15,7 @@
 #include <system_error>
 
 namespace ex  = stdexec;
-namespace net = netexec;
+namespace net = netexec::net;
 using namespace std::chrono_literals;
 
 // ---------------------------------------------------------------------------
@@ -50,7 +50,7 @@ auto process_request(auto& stream, std::string request) -> exec::task<void> {
         << "Content-Length: " << body.size() << "\r\n\r\n" << body;
     auto response = out.str();
 
-    co_await net::async_send(stream, net::buffer(response));
+    co_await net::ip::tcp::async_send_some(stream, net::buffer(response));
 }
 
 // ---------------------------------------------------------------------------
@@ -79,7 +79,7 @@ auto make_client(auto scheduler, auto stream) -> exec::task<void> {
     std::string request;
     try {
         while (auto n = co_await timeout(scheduler, 3s,
-                                         net::async_receive(stream, net::buffer(buffer)))) {
+                                         net::ip::tcp::async_receive_some(stream, net::buffer(buffer)))) {
             std::string_view sv(buffer, n);
             request += sv;
             if (request.npos != sv.find("\r\n\r\n")) {
@@ -98,7 +98,7 @@ auto make_client(auto scheduler, auto stream) -> exec::task<void> {
 // ---------------------------------------------------------------------------
 
 auto main() -> int {
-    net::scope             scope;
+    netexec::scope             scope;
     net::ip::tcp::endpoint ep(net::ip::address_v4::any(), 12345);
     net::ip::tcp::acceptor server(scope.get_context(), ep);
     std::cout << "listening on " << ep << "\n";
@@ -107,9 +107,9 @@ auto main() -> int {
     // stdexec::spawn(sender, scope_token) — fire-and-forget inside the scope.
     ex::spawn(
         std::invoke(
-            [](auto scheduler, net::scope& scp, auto& svr) -> exec::task<void> {
+            [](auto scheduler, netexec::scope& scp, auto& svr) -> exec::task<void> {
                 while (true) {
-                    auto [stream, address] = co_await net::async_accept(svr);
+                    auto [stream, address] = co_await net::ip::tcp::async_accept(svr);
                     std::cout << "received connection from " << address << "\n";
                     // Spawn client handler into the same scope
                     ex::spawn(

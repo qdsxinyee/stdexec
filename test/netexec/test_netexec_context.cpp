@@ -4,13 +4,13 @@
 #include "test_helpers.hpp"
 
 TEST_CASE("netexec - empty scope exits", "[netexec][context]") {
-    net::scope scope;
+    netexec::scope scope;
     ex::sync_wait(scope.run());
     CHECK(true);
 }
 
 TEST_CASE("netexec - schedule runs on context scheduler", "[netexec][context]") {
-    net::scope scope;
+    netexec::scope scope;
     bool       called = false;
 
     ex::spawn(
@@ -22,7 +22,7 @@ TEST_CASE("netexec - schedule runs on context scheduler", "[netexec][context]") 
 }
 
 TEST_CASE("netexec - multiple spawned tasks run", "[netexec][context]") {
-    net::scope scope;
+    netexec::scope scope;
     int        count = 0;
 
     for (int i = 0; i < 3; ++i) {

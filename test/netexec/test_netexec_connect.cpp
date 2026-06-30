@@ -5,22 +5,22 @@
 
 namespace {
 
-auto connect_and_close(net::scope& scope, std::uint16_t port, bool* ok) -> exec::task<void> {
+auto connect_and_close(netexec::scope& scope, std::uint16_t port, bool* ok) -> exec::task<void> {
     net::ip::tcp::socket socket(scope.get_context(), netexec_test::make_server_endpoint(port));
-    co_await net::async_connect(socket);
+    co_await net::ip::tcp::async_connect(socket);
     *ok = true;
 }
 
-auto connect_refused(net::scope& scope, std::uint16_t port, bool* refused) -> exec::task<void> {
+auto connect_refused(netexec::scope& scope, std::uint16_t port, bool* refused) -> exec::task<void> {
     net::ip::tcp::socket socket(scope.get_context(), netexec_test::make_server_endpoint(port));
-    *refused = co_await (net::async_connect(socket)
+    *refused = co_await (net::ip::tcp::async_connect(socket)
                            | ex::then([] { return false; })
                            | ex::upon_error([](auto&&) { return true; }));
 }
 
-auto serve_one_client(net::scope& scope, std::uint16_t port, bool* served) -> exec::task<void> {
+auto serve_one_client(netexec::scope& scope, std::uint16_t port, bool* served) -> exec::task<void> {
     net::ip::tcp::acceptor acceptor(scope.get_context(), netexec_test::make_server_endpoint(port));
-    auto [client, client_ep] = co_await net::async_accept(acceptor);
+    auto [client, client_ep] = co_await net::ip::tcp::async_accept(acceptor);
     *served = true;
     (void)client;
     (void)client_ep;
@@ -29,7 +29,7 @@ auto serve_one_client(net::scope& scope, std::uint16_t port, bool* served) -> ex
 } // namespace
 
 TEST_CASE("netexec - async_connect succeeds", "[netexec][connect]") {
-    net::scope scope;
+    netexec::scope scope;
     auto       port = netexec_test::next_port();
     bool       connected = false;
     bool       served = false;
@@ -47,7 +47,7 @@ TEST_CASE("netexec - async_connect succeeds", "[netexec][connect]") {
 }
 
 TEST_CASE("netexec - async_connect refused", "[netexec][connect]") {
-    net::scope scope;
+    netexec::scope scope;
     bool       refused = false;
 
     ex::spawn(

@@ -14,7 +14,7 @@ auto resume_and_set(net::io_context::scheduler_type scheduler, bool* fired) -> e
 } // namespace
 
 TEST_CASE("netexec - schedule on context scheduler", "[netexec]") {
-    net::scope scope;
+    netexec::scope scope;
     bool       called = false;
 
     ex::spawn(
@@ -26,7 +26,7 @@ TEST_CASE("netexec - schedule on context scheduler", "[netexec]") {
 }
 
 TEST_CASE("netexec - resume_after fires", "[netexec]") {
-    net::scope scope;
+    netexec::scope scope;
     bool       fired = false;
 
     ex::spawn(

@@ -15,7 +15,7 @@
 #include <string>
 
 namespace ex = stdexec;
-namespace net = netexec;
+namespace net = netexec::net;
 using namespace std::chrono_literals;
 
 namespace netexec_test {

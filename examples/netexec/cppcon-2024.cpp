@@ -12,7 +12,7 @@
 #include <unordered_map>
 
 namespace ex = stdexec;
-namespace net = netexec;
+namespace net = netexec::net;
 
 std::unordered_map<std::string, std::string> files{
     {"/", "data/index.html"},
@@ -38,14 +38,14 @@ auto process(auto& stream, const auto& request) -> exec::task<void> {
         << "\r\n"
         << body;
     auto response = out.str();
-    co_await net::async_send(stream, net::buffer(response));
+    co_await net::ip::tcp::async_send_some(stream, net::buffer(response));
 }
 
 auto make_client_handler(auto stream) -> exec::task<void> {
     char        buffer[16];
     std::string request;
     while (true) {
-        auto n = co_await net::async_receive(stream, net::buffer(buffer));
+        auto n = co_await net::ip::tcp::async_receive_some(stream, net::buffer(buffer));
         if (n == 0u)
             break;
         std::string_view data(buffer, n);
@@ -59,15 +59,15 @@ auto make_client_handler(auto stream) -> exec::task<void> {
 }
 
 auto main() -> int {
-    net::scope scope;
+    netexec::scope scope;
 
     net::ip::tcp::endpoint endpoint(net::ip::address_v4::any(), 12345);
     net::ip::tcp::acceptor acceptor(scope.get_context(), endpoint);
 
     ex::spawn(
-        [](net::scope& scp, auto& acc) -> exec::task<void> {
+        [](netexec::scope& scp, auto& acc) -> exec::task<void> {
             while (true) {
-                auto [stream, address] = co_await net::async_accept(acc);
+                auto [stream, address] = co_await net::ip::tcp::async_accept(acc);
                 std::cout << "received client: " << address << "\n";
                 ex::spawn(make_client_handler(std::move(stream)) | ex::upon_error([](auto&&) noexcept {}),
                           scp.get_token());
