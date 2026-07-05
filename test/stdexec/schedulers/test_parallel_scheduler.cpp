@@ -532,7 +532,7 @@ struct tracked_value_sender
 
     auto query(ex::get_completion_domain_t<ex::set_value_t>, auto const &...) const noexcept
     {
-      return ex::get_domain(sched_);
+      return ex::get_completion_domain<ex::set_value_t>(sched_);
     }
   };
 
@@ -620,8 +620,8 @@ TEST_CASE("bulk on parallel_scheduler destroys stored predecessor values",
   auto live = std::make_shared<std::atomic<int>>(0);
 
   {
-    STDEXEC::parallel_scheduler sched = STDEXEC::get_parallel_scheduler();
-    auto                        snd   = tracked_value_sender{sched, live}
+    auto sched = STDEXEC::get_parallel_scheduler();
+    auto snd   = tracked_value_sender{sched, live}
              | ex::bulk(ex::par, 16, [](std::size_t, destructor_tracked_value&) noexcept {});
 
     auto result = ex::sync_wait(std::move(snd));

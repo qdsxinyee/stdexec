@@ -120,6 +120,13 @@ namespace STDEXEC
         return __detail::__make_parallel_scheduler_from(_Tag(), __sched_);
       }
 
+      /// Returns the system scheduler as the completion domain for `set_value_t`.
+      [[nodiscard]]
+      auto query(get_completion_domain_t<set_value_t>) const noexcept -> __parallel_scheduler_domain
+      {
+        return {};
+      }
+
       /// The underlying implementation of the scheduler we are using.
       __backend_ptr_t __sched_;
     };
@@ -284,14 +291,6 @@ namespace STDEXEC
     /// Returns the execution domain of `this`.
     [[nodiscard]]
     auto query(get_completion_domain_t<set_value_t>) const noexcept -> __parallel_scheduler_domain
-    {
-      return {};
-    }
-
-    template <class... _Env>
-    [[nodiscard]]
-    auto query(get_completion_domain_t<set_value_t>, _Env const &...) const noexcept
-      -> __parallel_scheduler_domain
     {
       return {};
     }
@@ -613,7 +612,7 @@ namespace STDEXEC
           &__system_bulk_op::__prepare_storage_for_backend_impl;
 
         // Start using the preallocated buffer to store the inner operation state.
-        new (__preallocated_.__as_ptr()) __inner_op_state(std::move(__initFunc)(*this));
+        new (__preallocated_.__as_ptr()) __inner_op_state(static_cast<_InitF&&>(__initFunc)(*this));
       }
 
       __system_bulk_op(__system_bulk_op const &)                    = delete;
