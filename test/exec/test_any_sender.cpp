@@ -769,12 +769,10 @@ namespace
     template <class Error>
     void set_error(Error &&) noexcept
       requires ex::__one_of<ex::set_error_t(Error), _Sigs...>
-    {
-    }
+    {}
     void set_stopped() noexcept
       requires ex::__one_of<ex::set_stopped_t(), _Sigs...>
-    {
-    }
+    {}
     struct env
     {
       [[nodiscard]]
