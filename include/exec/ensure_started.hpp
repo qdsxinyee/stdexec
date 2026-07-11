@@ -28,6 +28,7 @@
 namespace experimental::execution
 {
   /////////////////////////////////////////////////////////////////////////////
+  // [execution.senders.adaptors.ensure_started]
   namespace __ensure_started
   {
     using namespace __shared;

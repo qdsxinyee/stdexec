@@ -28,7 +28,7 @@
 namespace STDEXEC
 {
   /////////////////////////////////////////////////////////////////////////////
-  // [exec.schedule.from]
+  // [execution.senders.adaptors.schedule_from]
   struct schedule_from_t
   {
     template <sender _Sender>

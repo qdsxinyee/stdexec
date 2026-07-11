@@ -44,7 +44,7 @@ CompileFlags:
   Add:
     - "-x"
     - "cuda"
-    - "-std=c++20"
+    - "-std=c++23"
     - "-Wno-unknown-cuda-version"
     - "--cuda-host-only"
     - "--cuda-path=/usr/local/cuda-12"
@@ -56,7 +56,7 @@ CompileFlags:
 
 # Tweak the clangd parse settings for all files
 CompileFlags:
-  CompilationDatabase: .
+  CompilationDatabase: build-ninja
   Add:
     - "-DLIBCUDACXX_ENABLE_EXPERIMENTAL_MEMORY_RESOURCE"
     # report all errors
@@ -103,3 +103,4 @@ Diagnostics:
     - "template_param_shadow"
     - "pp_expr_bad_token_binop" # erroneous error from STDEXEC_ENABLE_EXTRA_TYPE_CHECKING()
     - "#warnings"
+    - "ovl_no_viable_object_call" # clangd false positive on stdexec::sync_wait(when_all(...))

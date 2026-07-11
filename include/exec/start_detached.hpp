@@ -29,6 +29,7 @@
 namespace experimental::execution
 {
   /////////////////////////////////////////////////////////////////////////////
+  // [execution.senders.consumer.start_detached]
   namespace __start_detached
   {
     struct __submit_receiver

@@ -28,12 +28,9 @@
 #include "../stdexec/functional.hpp"
 
 #include "any_sender_of.hpp"
+#include "at_coroutine_exit.hpp"
 #include "completion_behavior.hpp"
 #include "scope.hpp"
-
-#if !STDEXEC_APPLE_CLANG()
-#  include "at_coroutine_exit.hpp"
-#endif
 
 STDEXEC_PRAGMA_PUSH()
 STDEXEC_PRAGMA_IGNORE_GNU("-Wundefined-inline")
@@ -422,7 +419,6 @@ namespace experimental::execution
       __std::coroutine_handle<_Promise> __parent_;
     };
 
-#if !STDEXEC_APPLE_CLANG()
     template <class _Scheduler, class _Promise>
     struct __reschedule_awaiter
     {
@@ -495,7 +491,6 @@ namespace experimental::execution
         return {static_cast<_Scheduler&&>(__sched)};
       }
     };
-#endif
 
     ////////////////////////////////////////////////////////////////////////////////
     // basic_task
@@ -616,7 +611,6 @@ namespace experimental::execution
           }
         }
 
-#  if !STDEXEC_APPLE_CLANG()
         template <class _Scheduler>
           requires __start_scheduler_provider<_Context>
         auto await_transform(__reschedule_coroutine_on_t::__wrapper<_Scheduler> __box) noexcept
@@ -624,7 +618,6 @@ namespace experimental::execution
         {
           return __reschedule_awaiter<_Scheduler, __promise>{__box.__sched_};
         }
-#  endif
 #endif
 
         template <__sender_adaptor_closure_for<__just_void<__scheduler_t>> _Closure>
@@ -725,9 +718,7 @@ namespace experimental::execution
   template <class _Ty>
   using task = basic_task<_Ty, default_task_context<_Ty>>;
 
-#if !STDEXEC_APPLE_CLANG()
   inline constexpr __task::__reschedule_coroutine_on_t reschedule_coroutine_on{};
-#endif
 }  // namespace experimental::execution
 
 namespace exec = experimental::execution;

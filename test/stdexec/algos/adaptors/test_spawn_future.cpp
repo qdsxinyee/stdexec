@@ -243,7 +243,6 @@ namespace
     CHECK(rsc2.allocated() == 0);
   }
 
-#if !STDEXEC_NO_STDCPP_EXCEPTIONS()
   TEST_CASE("spawn_future tolerates throwing scope tokens", "[consumers][spawn_future]")
   {
     counting_resource                 rsc;
@@ -277,7 +276,6 @@ namespace
 
     CHECK(rsc.allocated() == 0);
   }
-#endif
 
   TEST_CASE("spawn_future tolerates expired scope tokens", "[consumers][spawn_future]")
   {

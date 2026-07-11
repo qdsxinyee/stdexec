@@ -160,7 +160,6 @@ namespace
     CHECK(cat == typecat::rvalref);
   }
 
-#if !STDEXEC_NO_STDCPP_EXCEPTIONS()
   TEST_CASE("just works with types with throwing move", "[factories][just]")
   {
     struct throwing_move
@@ -227,7 +226,6 @@ namespace
     ::STDEXEC::start(op);
     CHECK(invoked == 1);
   }
-#endif
 
   TEST_CASE("just completes inline and has no completion domain", "[factories][just]")
   {

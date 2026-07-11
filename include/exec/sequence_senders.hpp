@@ -261,6 +261,7 @@ namespace experimental::execution
                           STDEXEC::_WITH_ENVIRONMENT_(_Env)...>;
 
   /////////////////////////////////////////////////////////////////////////////
+  // [execution.seqtraits]
   namespace __sequence_sndr
   {
     struct get_item_types_t;

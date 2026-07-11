@@ -1723,7 +1723,6 @@ namespace experimental::execution
           STDEXEC::__manual_lifetime<item_operation_t>>;
 
         std::vector<__manual_lifetime<item_operation_t>, item_allocator_t> items_;
-        std::size_t                                                        items_constructed_{};
 
        public:
         operation(Range range, _static_thread_pool& pool, Receiver rcvr)
@@ -1735,61 +1734,45 @@ namespace experimental::execution
 
         ~operation()
         {
-          for (std::size_t i = 0; i < items_constructed_; ++i)
+          if (this->has_started_)
           {
-            items_[i].__destroy();
+            for (auto& item: items_)
+            {
+              item.__destroy();
+            }
           }
         }
 
         void start() & noexcept
         {
-          std::size_t size = items_.size();
-          if (size == 0)
-          {
-            STDEXEC::set_value(static_cast<Receiver&&>(this->rcvr_));
-            return;
-          }
-
-          std::size_t nthreads = this->pool_.available_parallelism();
-          STDEXEC_ASSERT(nthreads > 0);
-          bwos_params params     = this->pool_.params();
-          std::size_t local_size = params.blockSize * params.numBlocks;
-          std::size_t chunk_size = __umax(
-            {std::size_t{1}, __umin({size / nthreads, local_size * nthreads})});
+          std::size_t size         = items_.size();
+          std::size_t nthreads     = this->pool_.available_parallelism();
+          bwos_params params       = this->pool_.params();
+          std::size_t local_size   = params.blockSize * params.numBlocks;
+          std::size_t chunk_size   = __umin({size / nthreads, local_size * nthreads});
           auto&       remote_queue = *this->pool_.get_remote_queue();
           auto        it           = std::ranges::begin(this->range_);
           std::size_t i0           = 0;
-          STDEXEC_TRY
-          {
-            for (std::size_t i = 0; i < size; ++i)
-            {
-              items_[i].__construct_from(STDEXEC::connect,
-                                         set_next(this->rcvr_, item_sender_t{this, it + i}),
-                                         next_receiver_t{this});
-              ++items_constructed_;
-            }
-          }
-          STDEXEC_CATCH_ALL
-          {
-            STDEXEC::set_error(static_cast<Receiver&&>(this->rcvr_), std::current_exception());
-            return;
-          }
-
           while (i0 + chunk_size < size)
           {
             for (std::size_t i = i0; i < i0 + chunk_size; ++i)
             {
+              items_[i].__construct_from(STDEXEC::connect,
+                                         set_next(this->rcvr_, item_sender_t{this, it + i}),
+                                         next_receiver_t{this});
               STDEXEC::start(items_[i].__get());
             }
 
             std::unique_lock lock{this->start_mutex_};
             this->pool_.bulk_enqueue(remote_queue, std::move(this->tasks_), this->tasks_size_);
-            this->tasks_size_ = 0;
             lock.unlock();
             i0 += chunk_size;
           }
           for (std::size_t i = i0; i < size; ++i)
           {
+            items_[i].__construct_from(STDEXEC::connect,
+                                       set_next(this->rcvr_, item_sender_t{this, it + i}),
+                                       next_receiver_t{this});
             STDEXEC::start(items_[i].__get());
           }
           std::unique_lock lock{this->start_mutex_};

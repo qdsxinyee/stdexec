@@ -24,8 +24,15 @@ if(POLICY CMP0167)
 endif()
 
 ##############################################################################
+# - Download and initialize RAPIDS CMake helpers -----------------------------
+
+# Fetch rapids-cmake
+if(NOT EXISTS ${CMAKE_CURRENT_BINARY_DIR}/RAPIDS.cmake)
+  file(DOWNLOAD https://raw.githubusercontent.com/rapidsai/rapids-cmake/branch-24.02/RAPIDS.cmake
+       ${CMAKE_CURRENT_BINARY_DIR}/RAPIDS.cmake)
+endif()
 # Initialize rapids-cmake
-include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/RAPIDS.cmake)
+include(${CMAKE_CURRENT_BINARY_DIR}/RAPIDS.cmake)
 # utilities for generating export set package metadata
 include(rapids-export)
 # utilities for finding packages
@@ -34,7 +41,17 @@ include(rapids-find)
 include(rapids-cmake)
 # utilities for using CPM
 include(rapids-cpm)
+
+##############################################################################
 # - Project definition -------------------------------------------------------
+
+# Define the project and set the version and languages
+if(NOT EXISTS ${CMAKE_CURRENT_BINARY_DIR}/execution.bs)
+  file(DOWNLOAD "https://raw.githubusercontent.com/cplusplus/sender-receiver/main/execution.bs"
+      ${CMAKE_CURRENT_BINARY_DIR}/execution.bs)
+endif()
+file(STRINGS "${CMAKE_CURRENT_BINARY_DIR}/execution.bs" STD_EXECUTION_BS_REVISION_LINE REGEX "Revision: [0-9]+")
+string(REGEX REPLACE "Revision: ([0-9]+)" "\\1" STD_EXECUTION_BS_REVISION ${STD_EXECUTION_BS_REVISION_LINE})
 
 # Determine if STDEXEC is built as a subproject (using add_subdirectory) or if it is the main project.
 if (NOT DEFINED STDEXEC_MAIN_PROJECT)
@@ -45,7 +62,7 @@ if (NOT DEFINED STDEXEC_MAIN_PROJECT)
   endif ()
 endif ()
 
-project(STDEXEC VERSION "0.11.0" LANGUAGES CXX)
+project(STDEXEC VERSION "0.${STD_EXECUTION_BS_REVISION}.0" LANGUAGES CXX)
 
 include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/Modules/CompilerHelpers.cmake)
 
@@ -156,13 +173,11 @@ endif()
 # Additionally, we require GCC-12 or newer for Relacy, at __atomic.hpp has fallback
 # when std::atomic<std::shared_ptr<>> is not provided, and GCC-12 is the first
 # libstdc++ that provides it.
-# Additionally, realacy is not ready for -fno-exceptions.
 if(
   ${STDEXEC_BUILD_TESTS} AND
   CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND
   CMAKE_CXX_COMPILER_VERSION VERSION_GREATER_EQUAL 12 AND
-  NOT CMAKE_CXX_FLAGS MATCHES "-fsanitize" AND
-  NOT CMAKE_CXX_FLAGS MATCHES "-fno-exceptions")
+  NOT CMAKE_CXX_FLAGS MATCHES "-fsanitize")
   set(STDEXEC_BUILD_RELACY_TESTS_DEFAULT ON)
 else()
   set(STDEXEC_BUILD_RELACY_TESTS_DEFAULT OFF)
@@ -252,21 +267,52 @@ if (STDEXEC_ENABLE_EXTRA_TYPE_CHECKING)
   target_compile_definitions(stdexec INTERFACE STDEXEC_ENABLE_EXTRA_TYPE_CHECKING)
 endif()
 
+# ----------------------------------------------------------------------------
+# TLS backend selection
+# ----------------------------------------------------------------------------
+set(NETEXEC_TLS_BACKEND "auto" CACHE STRING
+    "TLS backend: auto, openssl, schannel, mbedtls, secure_transport")
+
+if(NETEXEC_TLS_BACKEND STREQUAL "auto")
+  if(WIN32)
+    set(NETEXEC_TLS_BACKEND "schannel")
+  elseif(APPLE)
+    set(NETEXEC_TLS_BACKEND "secure_transport")
+  else()
+    set(NETEXEC_TLS_BACKEND "openssl")
+  endif()
+endif()
+
+message(STATUS "netexec TLS backend: ${NETEXEC_TLS_BACKEND}")
+
+if(NETEXEC_TLS_BACKEND STREQUAL "schannel")
+  target_compile_definitions(stdexec INTERFACE NETEXEC_TLS_USE_SCHANNEL)
+  target_link_libraries(stdexec INTERFACE secur32 crypt32)
+elseif(NETEXEC_TLS_BACKEND STREQUAL "openssl")
+  target_compile_definitions(stdexec INTERFACE NETEXEC_TLS_USE_OPENSSL)
+  if(NOT WIN32)
+    find_package(OpenSSL REQUIRED)
+    target_link_libraries(stdexec INTERFACE OpenSSL::SSL OpenSSL::Crypto)
+  endif()
+elseif(NETEXEC_TLS_BACKEND STREQUAL "mbedtls")
+  target_compile_definitions(stdexec INTERFACE NETEXEC_TLS_USE_MBEDTLS)
+  # TODO: fetch or find mbedTLS
+elseif(NETEXEC_TLS_BACKEND STREQUAL "secure_transport")
+  target_compile_definitions(stdexec INTERFACE NETEXEC_TLS_USE_SECURE_TRANSPORT)
+  target_link_libraries(stdexec INTERFACE "-framework Security" "-framework Network")
+else()
+  message(FATAL_ERROR "Unknown NETEXEC_TLS_BACKEND: ${NETEXEC_TLS_BACKEND}")
+endif()
+# ----------------------------------------------------------------------------
+
 add_library(STDEXEC::stdexec ALIAS stdexec)
 
 # Support target for examples and tests
 add_library(stdexec_executable_flags INTERFACE)
 
-# suppress Wunused-parameter in cased of fno-exceptions due to Catch2 bug https://github.com/catchorg/Catch2/issues/3114
-if(CMAKE_CXX_FLAGS MATCHES "-fno-exceptions")
-  set(SUPPRESS_WUNUSED_PARAMETER 1)
-else()
-  set(SUPPRESS_WUNUSED_PARAMETER 0)
-endif()
-
 # Enable warnings
 target_compile_options(stdexec_executable_flags INTERFACE
-                       $<$<STREQUAL:${stdexec_compiler_frontend},GNU>:-Wall;$<IF:${SUPPRESS_WUNUSED_PARAMETER},-Wno-unused-parameter,-Werror=unused-parameter>>
+                       $<$<STREQUAL:${stdexec_compiler_frontend},GNU>:-Wall;-Werror=unused-parameter>
                        $<$<STREQUAL:${stdexec_compiler_frontend},AppleClang>:-Wall>
                        $<$<STREQUAL:${stdexec_compiler_frontend},MSVC>:/W4>)
 
@@ -415,9 +461,7 @@ include(ConfigureASIO)
 if (CMAKE_SYSTEM_NAME STREQUAL "Darwin")
   check_include_file_cxx("dispatch/dispatch.h" STDEXEC_FOUND_LIBDISPATCH)
   option(STDEXEC_ENABLE_LIBDISPATCH "Enable use of the Grand Central Dispatch scheduler" ${STDEXEC_FOUND_LIBDISPATCH})
-  if (STDEXEC_ENABLE_LIBDISPATCH)
-    target_compile_definitions(stdexec INTERFACE STDEXEC_ENABLE_LIBDISPATCH)
-  endif()
+  target_compile_definitions(stdexec INTERFACE STDEXEC_ENABLE_LIBDISPATCH)
 endif()
 
 if (CMAKE_SYSTEM_NAME STREQUAL "Windows")

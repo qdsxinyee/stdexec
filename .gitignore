@@ -16,3 +16,6 @@ callgrind.*
 a.out
 *.code-workspace
 .venv-codex
+
+# Generated development certificates
+examples/netexec/certs/

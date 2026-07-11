@@ -28,6 +28,7 @@
 namespace experimental::execution
 {
   ////////////////////////////////////////////////////////////////////////////
+  // [execution.senders.adaptors.split]
   struct split_t
   {
     template <class _Env = STDEXEC::env<>, STDEXEC::sender_in<_Env> _CvSender>

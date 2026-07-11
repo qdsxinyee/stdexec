@@ -249,7 +249,6 @@ namespace
     REQUIRE(counter == 10);
   }
 
-#if !STDEXEC_NO_STDCPP_EXCEPTIONS()
   TEST_CASE("repeat works correctly when the child operation sends an error type which throws when "
             "decay-copied",
             "[adaptors][repeat]")
@@ -473,7 +472,6 @@ namespace
         "Missing added set_error_t(std::exception_ptr)");
     }
   }
-#endif
 
   TEST_CASE("repeat_until works with a dependent sender", "[adaptors][repeat_until]")
   {

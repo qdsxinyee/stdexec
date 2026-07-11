@@ -37,6 +37,7 @@
 #include "__detail/__intrusive_slist.hpp"
 #include "__detail/__just.hpp"
 #include "__detail/__let.hpp"
+#include "__detail/__let_async_scope.hpp"
 #include "__detail/__meta.hpp"
 #include "__detail/__on.hpp"
 #include "__detail/__operation_states.hpp"

@@ -64,7 +64,6 @@ struct recv_set_value_noexcept
   }
 };
 
-#if !STDEXEC_NO_STDCPP_EXCEPTIONS()
 struct recv_set_error_except
 {
   using receiver_concept = STDEXEC::receiver_tag;
@@ -82,7 +81,6 @@ struct recv_set_error_except
     return {};
   }
 };
-
 struct recv_set_stopped_except
 {
   using receiver_concept = STDEXEC::receiver_tag;
@@ -100,7 +98,6 @@ struct recv_set_stopped_except
     return {};
   }
 };
-#endif
 
 struct recv_non_movable
 {

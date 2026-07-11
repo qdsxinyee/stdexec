@@ -160,6 +160,7 @@ if(STDEXEC_BUILD_PARALLEL_SCHEDULER AND NOT STDEXEC_ENABLE_CUDA)
 endif()
 
 add_subdirectory(exec)
+add_subdirectory(netexec)
 
 if(STDEXEC_ENABLE_CUDA)
     add_subdirectory(nvexec)

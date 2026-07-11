@@ -30,7 +30,7 @@ STDEXEC_PRAGMA_IGNORE_EDG(type_qualifiers_ignored_on_reference)
 namespace STDEXEC
 {
   /////////////////////////////////////////////////////////////////////////////
-  // [exec.snd.transform]
+  // [execution.transform_sender]
   namespace __detail
   {
     template <class _Domain, class _OpTag>
@@ -167,7 +167,7 @@ namespace STDEXEC
     || __detail::__has_apply_sender<default_domain, _Tag, _Sender, _Args...>;
 
   /////////////////////////////////////////////////////////////////////////////
-  // [exec.snd.apply]
+  // [execution.apply_sender]
   inline constexpr struct apply_sender_t
   {
     template <class _Domain, class _Tag, class _Sender, class... _Args>
