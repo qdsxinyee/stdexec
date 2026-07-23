@@ -205,6 +205,32 @@ namespace STDEXEC
                         connect(static_cast<_Sender &&>(__sndr), static_cast<_Receiver &&>(__rcvr));
                       };
 
+  //! @brief A @c sender whose completion signatures depend on the receiver's
+  //!        environment and therefore cannot be computed without one.
+  //!
+  //! `dependent_sender<S>` is true when @c S satisfies @c sender *and*
+  //! `get_completion_signatures<S>()` — called with *no* environment — throws
+  //! a `stdexec::dependent_sender_error` at constant evaluation time. That
+  //! exception signals that @c S needs to inspect the receiver's environment
+  //! before it can enumerate how it will complete.
+  //!
+  //! This is the complement of a *non-dependent* sender. For any @c S:
+  //!
+  //! - If `sender<S>` is true and `dependent_sender<S>` is false, then @c S
+  //!   is a **non-dependent** sender: its completion signatures are fixed and
+  //!   can be queried without an environment (i.e. `sender_in<S>` is true).
+  //! - If `dependent_sender<S>` is true, a consumer must supply an environment
+  //!   (e.g. `sender_in<S, Env>`) before the signatures are available.
+  //!
+  //! Generic code that needs to handle both cases — for example, an adaptor
+  //! that wants to propagate dependency to its output sender — can use this
+  //! concept to opt into the dependent-sender machinery.
+  //!
+  //! See [exec.snd.concepts] in the C++26 working draft.
+  //!
+  //! @see stdexec::sender                    — the base concept (no environment required)
+  //! @see stdexec::sender_in                 — sender with a concrete environment
+  //! @see stdexec::get_completion_signatures — the CPO that throws @c dependent_sender_error
   template <class _Sender>
   concept dependent_sender = sender<_Sender> && __is_dependent_sender<_Sender>;
 
