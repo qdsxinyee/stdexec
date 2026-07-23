@@ -455,6 +455,8 @@ if(STDEXEC_BUILD_PARALLEL_SCHEDULER)
   add_library(STDEXEC::parallel_scheduler ALIAS parallel_scheduler)
   add_library(system_context ALIAS parallel_scheduler)
   add_library(STDEXEC::system_context ALIAS parallel_scheduler)
+
+  set(stdexec_export_targets ${stdexec_export_targets} parallel_scheduler)
 endif()
 
 option(STDEXEC_ENABLE_IO_URING "Enable the use of the io_uring scheduler on Linux" OFF)
