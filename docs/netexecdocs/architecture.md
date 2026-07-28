@@ -18,6 +18,10 @@ netexec 采用**两层 API** 设计：
   - `async_send` / `async_receive` / `async_resolve`
   - 直接操作 socket/acceptor、裸 buffer、单次系统调用
 
+- **两层之间的转换**（定义在 tls 层，tcp 层 API 不变）
+  - 升级：`net::tls::async_initiate(pre, socket)` 把已连接的 `tcp::socket` 升级为 `net::tls::stream`（驱动客户端握手；`secure=false` 时只包装）
+  - 降级：`stream.release_socket()` 丢弃 TLS session 并交还底层 `tcp::socket` 的所有权，通常先 `async_shutdown` 再释放
+
 - **底层实现**：`netexec::__detail::*`
   - `io_context` / scheduler / sender CPO
   - IOCP / poll / io_uring backend
@@ -166,6 +170,8 @@ netexec 通过 `NETEXEC_TLS_BACKEND` CMake 选项选择 TLS 后端。Windows 默
 - `schannel_tls_context`：加载证书、创建 credentials、创建 session
 - `schannel_tls_session`：驱动 TLS 握手、加密/解密数据
 - `generate_self_signed_certificate`：未提供证书时生成自签名证书
+
+凭据生命周期：context 创建 session 时，凭据（`CredHandle` 及服务端证书）被封装进 `credential_set`，由 context 与所有 session 通过 `shared_ptr` 共享所有权。因此 session 可以安全地存活于 context 析构之后（`async_initiate` 在握手完成后即销毁局部 context），TLS 1.3 post-handshake 步骤再次使用凭据时也不存在悬垂指针。
 
 未提供 `net::tls::certificate` / `net::tls::private_key` 时，服务端会动态生成一张自签名证书，CN 和 SAN 取自 `net::hostname()`（默认 `localhost`）。为方便通过回环 IP 直接访问，SAN 还包含 `127.0.0.1` 与 `::1`。这样 `https://localhost:8443/`、`https://127.0.0.1:8443/` 与 `https://[::1]:8443/` 都能通过名称校验（仍会提示自签名证书不安全）。
 

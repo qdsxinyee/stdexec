@@ -9,6 +9,7 @@
 #include <netexec/net/tls/context.hpp>
 #include <memory>
 #include <string>
+#include <system_error>
 
 namespace netexec::net::tls {
 
@@ -40,25 +41,33 @@ class preconnection {
 
     // Create a TLS context appropriate for this preconnection's security
     // configuration. The concrete backend is selected at compile time.
+    //
+    // Files the user explicitly asked for (certificate, private key, CA
+    // bundle) must load successfully; a failure throws std::system_error
+    // describing which file could not be loaded and why.  The default trust
+    // store is best-effort by contrast: it is an implicit enhancement, so a
+    // failure there is tolerated (validation may still succeed via a custom
+    // CA bundle).
     auto make_context() const -> std::unique_ptr<netexec::net::tls::__detail::context_base> {
         auto ctx = std::make_unique<netexec::net::tls::__detail::context>();
         ctx->set_hostname(this->hostname_);
 
         if (!this->certificate_file_.empty()) {
             if (auto ec = ctx->use_certificate_file(this->certificate_file_)) {
-                // TODO: propagate error to caller instead of ignoring.
-                (void)ec;
+                throw std::system_error(
+                    ec, "net::tls: failed to load certificate file '" + this->certificate_file_ + "'");
             }
         }
         if (!this->private_key_file_.empty()) {
             if (auto ec = ctx->use_private_key_file(this->private_key_file_)) {
-                (void)ec;
+                throw std::system_error(
+                    ec, "net::tls: failed to load private key file '" + this->private_key_file_ + "'");
             }
         }
         if (!this->ca_bundle_file_.empty()) {
             if (auto ec = ctx->use_ca_bundle(this->ca_bundle_file_)) {
-                // TODO: propagate error to caller instead of ignoring.
-                (void)ec;
+                throw std::system_error(
+                    ec, "net::tls: failed to load CA bundle file '" + this->ca_bundle_file_ + "'");
             }
         }
         if (this->use_system_trust_store_ && this->ca_bundle_file_.empty()) {

@@ -184,6 +184,14 @@ icm_add_build_failure_test(
     FOLDER test
 )
 
+icm_add_build_failure_test(
+    NAME test_let_async_scope_fail1
+    TARGET test_let_async_scope_fail1
+    SOURCES PARSE stdexec/algos/adaptors/test_let_async_scope_fail1.cpp
+    LIBRARIES stdexec
+    FOLDER test
+)
+
 if(STDEXEC_BUILD_RELACY_TESTS)
     add_subdirectory(rrd)
 endif()

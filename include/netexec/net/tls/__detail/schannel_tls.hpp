@@ -544,19 +544,51 @@ inline auto import_private_key(
 //      ciphertext with feed_incoming().
 //   3. After the handshake, use encrypt() / decrypt() for application data.
 // ----------------------------------------------------------------------------
+// ----------------------------------------------------------------------------
+// A Schannel credential handle plus the certificate it was acquired from
+// (server credentials only).  Instances are shared between a context and all
+// sessions created from it: sessions drive InitializeSecurityContext /
+// AcceptSecurityContext with this handle, so it must stay alive as long as
+// any session exists -- including after the originating context is gone
+// (async_initiate destroys its local context right after the handshake, and
+// TLS 1.3 post-handshake steps may touch the credentials even later).
+// ----------------------------------------------------------------------------
+struct credential_set {
+    CredHandle     handle{};
+    bool           valid{false};
+    PCCERT_CONTEXT cert{nullptr};
+
+    credential_set() = default;
+
+    credential_set(const credential_set&)            = delete;
+    credential_set& operator=(const credential_set&) = delete;
+    credential_set(credential_set&&)                 = delete;
+    credential_set& operator=(credential_set&&)      = delete;
+
+    ~credential_set() {
+        if (this->valid) {
+            ::FreeCredentialsHandle(&this->handle);
+        }
+        if (this->cert != nullptr) {
+            ::CertFreeCertificateContext(this->cert);
+        }
+    }
+};
+
 class schannel_tls_session : public session_base {
   public:
     // Client-side constructor.
-    schannel_tls_session(CredHandle* cred, std::string target_name, HCERTSTORE ca_store = nullptr)
-        : cred_(cred)
+    schannel_tls_session(
+        std::shared_ptr<credential_set> cred, std::string target_name, HCERTSTORE ca_store = nullptr)
+        : cred_(std::move(cred))
         , target_name_(std::move(target_name))
         , ca_store_(ca_store)
         , manual_validation_(ca_store != nullptr)
         , is_client_(true) {}
 
     // Server-side constructor.
-    explicit schannel_tls_session(CredHandle* cred, std::vector<unsigned char> alpn = {})
-        : cred_(cred)
+    explicit schannel_tls_session(std::shared_ptr<credential_set> cred, std::vector<unsigned char> alpn = {})
+        : cred_(std::move(cred))
         , alpn_buffer_(std::move(alpn))
         , is_client_(false) {}
 
@@ -657,7 +689,7 @@ class schannel_tls_session : public session_base {
         TimeStamp expiry{};
         if (this->is_client_) {
             status = ::InitializeSecurityContextA(
-                this->cred_,
+                &this->cred_->handle,
                 &this->context_,
                 nullptr,
                 ISC_REQ_SEQUENCE_DETECT | ISC_REQ_REPLAY_DETECT | ISC_REQ_CONFIDENTIALITY
@@ -672,7 +704,7 @@ class schannel_tls_session : public session_base {
                 &expiry);
         } else {
             status = ::AcceptSecurityContext(
-                this->cred_,
+                &this->cred_->handle,
                 &this->context_,
                 nullptr,
                 ASC_REQ_SEQUENCE_DETECT | ASC_REQ_REPLAY_DETECT | ASC_REQ_CONFIDENTIALITY
@@ -870,7 +902,7 @@ class schannel_tls_session : public session_base {
         const auto* target = this->target_name_.empty() ? nullptr : this->target_name_.c_str();
 
         const auto status = ::InitializeSecurityContextA(
-            this->cred_,
+            &this->cred_->handle,
             this->context_initialized_ ? &this->context_ : nullptr,
             const_cast<SEC_CHAR*>(target),
             ISC_REQ_SEQUENCE_DETECT | ISC_REQ_REPLAY_DETECT | ISC_REQ_CONFIDENTIALITY
@@ -1021,7 +1053,7 @@ class schannel_tls_session : public session_base {
 
         DWORD context_attr = 0;
         const auto status  = ::AcceptSecurityContext(
-            this->cred_,
+            &this->cred_->handle,
             this->context_initialized_ ? &this->context_ : nullptr,
             &indesc,
             ASC_REQ_SEQUENCE_DETECT | ASC_REQ_REPLAY_DETECT | ASC_REQ_CONFIDENTIALITY
@@ -1122,7 +1154,7 @@ class schannel_tls_session : public session_base {
         ec.clear();
     }
 
-    CredHandle*  cred_{nullptr};
+    std::shared_ptr<credential_set> cred_;
     std::string  target_name_;
     HCERTSTORE   ca_store_{nullptr};
     bool         manual_validation_{false};
@@ -1148,12 +1180,9 @@ class schannel_tls_context : public context_base {
     schannel_tls_context() = default;
 
     ~schannel_tls_context() {
-        if (this->client_cred_valid_) {
-            ::FreeCredentialsHandle(&this->client_cred_);
-        }
-        if (this->server_cred_valid_) {
-            ::FreeCredentialsHandle(&this->server_cred_);
-        }
+        // Credentials and the certificate they were acquired from are owned
+        // by the shared credential_set objects; sessions created from this
+        // context keep them alive as long as needed.
         if (this->server_cert_ != nullptr) {
             ::CertFreeCertificateContext(this->server_cert_);
         }
@@ -1195,8 +1224,7 @@ class schannel_tls_context : public context_base {
             if (this->server_cert_ != nullptr) {
                 ::CertFreeCertificateContext(this->server_cert_);
             }
-            this->server_cert_       = cert;
-            this->server_cert_owned_ = true;
+            this->server_cert_ = cert;
 
             // If a private key was already loaded, associate it with the new cert.
             return this->apply_private_key_to_certificate();
@@ -1302,8 +1330,11 @@ class schannel_tls_context : public context_base {
         if (ec) {
             return nullptr;
         }
+        // Note: ca_store_ is passed as a raw handle; the session only uses it
+        // for certificate validation during the handshake, and all callers
+        // keep this context alive until the handshake completes.
         return std::make_unique<schannel_tls_session>(
-            &this->client_cred_, this->target_name_, this->ca_store_);
+            this->client_creds_, this->target_name_, this->ca_store_);
     }
 
     auto create_server_session() -> std::unique_ptr<session_base> override {
@@ -1312,7 +1343,7 @@ class schannel_tls_context : public context_base {
             return nullptr;
         }
         return std::make_unique<schannel_tls_session>(
-            &this->server_cred_,
+            this->server_creds_,
             schannel::make_alpn_protocols_buffer("http/1.1"));
     }
 
@@ -1342,7 +1373,7 @@ class schannel_tls_context : public context_base {
 
 
     auto ensure_client_credentials() -> std::error_code {
-        if (this->client_cred_valid_) {
+        if (this->client_creds_) {
             return {};
         }
 
@@ -1357,6 +1388,7 @@ class schannel_tls_context : public context_base {
             cred.dwFlags |= SCH_CRED_MANUAL_CRED_VALIDATION;
         }
 
+        auto creds = std::make_shared<credential_set>();
         const auto status = ::AcquireCredentialsHandleA(
             nullptr,
             const_cast<SEC_CHAR*>(UNISP_NAME_A),
@@ -1365,19 +1397,20 @@ class schannel_tls_context : public context_base {
             &cred,
             nullptr,
             nullptr,
-            &this->client_cred_,
+            &creds->handle,
             nullptr);
 
         if (status != SEC_E_OK) {
             return schannel::make_error_code(status);
         }
 
-        this->client_cred_valid_ = true;
+        creds->valid       = true;
+        this->client_creds_ = std::move(creds);
         return {};
     }
 
     auto ensure_server_credentials() -> std::error_code {
-        if (this->server_cred_valid_) {
+        if (this->server_creds_) {
             return {};
         }
 
@@ -1389,7 +1422,6 @@ class schannel_tls_context : public context_base {
             if (this->server_cert_ == nullptr) {
                 return make_error_code(tls_errc::handshake_failed);
             }
-            this->server_cert_owned_ = true;
         }
 
         // Allow the platform default TLS versions (TLS 1.2+ on modern Windows).
@@ -1407,6 +1439,7 @@ class schannel_tls_context : public context_base {
         cred.cTlsParameters = 0;
         cred.pTlsParameters = nullptr;
 
+        auto creds = std::make_shared<credential_set>();
         const auto status = ::AcquireCredentialsHandleA(
             nullptr,
             const_cast<SEC_CHAR*>(UNISP_NAME_A),
@@ -1415,23 +1448,25 @@ class schannel_tls_context : public context_base {
             &cred,
             nullptr,
             nullptr,
-            &this->server_cred_,
+            &creds->handle,
             nullptr);
 
         if (status != SEC_E_OK) {
             return schannel::make_error_code(status);
         }
 
-        this->server_cred_valid_ = true;
+        creds->valid = true;
+        // Move the certificate into the credential set so it stays alive as
+        // long as the handle -- and as long as any session using them.
+        creds->cert         = this->server_cert_;
+        this->server_cert_  = nullptr;
+        this->server_creds_ = std::move(creds);
         return {};
     }
 
-    CredHandle      client_cred_{};
-    bool            client_cred_valid_{false};
-    CredHandle      server_cred_{};
-    bool            server_cred_valid_{false};
+    std::shared_ptr<credential_set> client_creds_;
+    std::shared_ptr<credential_set> server_creds_;
     PCCERT_CONTEXT  server_cert_{nullptr};
-    bool            server_cert_owned_{false};
     HCRYPTPROV      key_prov_{0};
     std::wstring    key_container_;
     HCERTSTORE      ca_store_{nullptr};

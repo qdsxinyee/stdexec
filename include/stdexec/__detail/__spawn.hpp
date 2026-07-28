@@ -30,6 +30,7 @@
 #include <memory>
 #include <type_traits>
 #include <utility>
+#include <variant>
 
 #include "__prologue.hpp"
 
@@ -43,7 +44,7 @@ namespace STDEXEC
     {
       explicit __spawn_state_base(void (*__complete)(__spawn_state_base*) noexcept) noexcept
         : __complete_(__complete)
-      {}
+      { }
 
       __spawn_state_base(__spawn_state_base&&) = delete;
 
@@ -86,7 +87,7 @@ namespace STDEXEC
         , __alloc_(std::move(__alloc))
         , __op_(connect(std::move(__sndr), __spawn_receiver(this)))
         , __assoc_(__token.try_associate())
-      {}
+      { }
 
       void __run() noexcept
       {
@@ -188,6 +189,25 @@ namespace STDEXEC
     //!                                when the spawned work completes
     //! @see exec::start_detached    — scope-less fire-and-forget (extension)
     //! @see stdexec::sync_wait      — top-level synchronous wait that returns the result
+    // Hook for let_async_scope tokens (P3296R6): verify that every error type
+    // the spawned sender can produce is listed in the token's error list.
+    template <class _Token, class _Variant>
+      requires __is_instance_of<_Variant, std::variant>
+    constexpr void __check_scope_errors()
+    {
+      []<class... _E>(std::variant<_E...>*)
+      {
+        static_assert((_Token::template __error_allowed_v<_E> && ...),
+                      "spawn: the sender's error completions are not compatible with the "
+                      "let_async_scope error list");
+      }(static_cast<_Variant*>(nullptr));
+    }
+
+    template <class _Token, class _Variant>
+      requires(!__is_instance_of<_Variant, std::variant>)
+    constexpr void __check_scope_errors()
+    { }
+
     struct spawn_t
     {
      private:
@@ -258,6 +278,19 @@ namespace STDEXEC
         requires __never_sends<STDEXEC::set_error_t, _spawn_sndr_t<_Sender, _Token, _Env>, _Env>
       void operator()(_Sender&& __sndr, _Token __tkn, _Env&& __env) const
       {
+        if constexpr (requires {
+                        typename _Token::__scope_env_t;
+                        _Token::__any_error_allowed_v;
+                      })
+        {
+          if constexpr (!_Token::__any_error_allowed_v)
+          {
+            using __scope_env_t = typename _Token::__scope_env_t;
+            using __errs_t      = __error_types_of_t<_Sender, __scope_env_t>;
+            __check_scope_errors<_Token, __errs_t>();
+          }
+        }
+
         auto __wrapped_sender = __tkn.wrap(static_cast<_Sender&&>(__sndr));
         auto __sndr_env       = get_env(__wrapped_sender);
 

@@ -38,6 +38,7 @@ namespace netexec::net {
 // tls 层 API
 namespace tls {
     async_initiate;      // (preconnection, io_context) -> sender<stream>
+                         // (preconnection, tcp::socket) -> sender<stream>：升级已连接 socket
     async_listen;        // (preconnection, io_context) -> sender<acceptor>
     async_accept;        // (acceptor) -> sender<stream>
     async_send;          // (stream, message) -> sender<void>
@@ -166,7 +167,27 @@ auto server(net::io_context& ctx) -> exec::task<void> {
 
 `net::tls::async_accept` 从 `net::tls::acceptor` 取出一个新连接：内部先执行底层 `tcp::async_accept`，若 acceptor 启用了 TLS 则继续完成服务端握手，最后返回可直接收发数据的 `net::tls::stream`。连接处理结束时调用 `net::tls::async_shutdown` 发送 TLS `close_notify` 实现优雅关闭。
 
-### 2.5 结构化并发
+### 2.5 两层之间的升级与降级
+
+socket 层与 tls 层之间是双向连通的，tls 层提供两个转换原语（tcp 层 API 不变）：
+
+- **升级**：`net::tls::async_initiate(pre, socket)` 重载接收一个**已连接**的 `tcp::socket`（按值接管所有权），跳过 resolve/connect，直接在其上驱动客户端 TLS 握手（`secure=false` 时只包装不握手），握手成功后返回 `net::tls::stream`。适用于 STARTTLS、代理隧道、协议嗅探分流等需要自己控制连接建立的场景。
+- **降级**：`stream.release_socket()` 是同步成员函数，丢弃 TLS session（不发 `close_notify`，session 内未消费的明文随之丢弃）并把底层 `tcp::socket` 的所有权交还调用者；之后可继续使用 `tcp::async_send` / `tcp::async_receive` 等 socket 层 API。对 secure 的 stream 通常先 `co_await net::tls::async_shutdown(stream)` 再释放，实现优雅降级。
+
+```cpp
+// 手动建立 TCP 连接，再升级到 tls 层
+tcp::socket sock(ctx, ep);
+co_await tcp::async_connect(sock);
+auto stream = co_await net::tls::async_initiate(pre, std::move(sock));
+co_await net::tls::async_send(stream, net::message(std::string("hello")));
+
+// 优雅降级回 socket 层
+co_await net::tls::async_shutdown(stream);
+tcp::socket raw = stream.release_socket();
+co_await tcp::async_send(raw, net::buffer("plain", 5));
+```
+
+### 2.6 结构化并发
 
 结合 `stdexec::counting_scope` 或 `stdexec::let_async_scope`：
 
@@ -201,7 +222,7 @@ ex::sync_wait(scope.join());
 
 4. 浏览器访问 `https://localhost:8443/`，不再提示自签名证书不安全。
 
-`https-server-trusted.cpp` 通过 `net::tls::certificate(...)` 和 `net::tls::private_key(...)` 向 `net::tls::preconnection` 提供 PEM 文件路径；Schannel 后端在启动时加载这些文件并用于 TLS 握手。如果证书文件缺失或格式错误，服务器启动会失败，而不是回退到自签名证书。
+`https-server-trusted.cpp` 通过 `net::tls::certificate(...)` 和 `net::tls::private_key(...)` 向 `net::tls::preconnection` 提供 PEM 文件路径；Schannel 后端在启动时加载这些文件并用于 TLS 握手。如果证书文件缺失或格式错误，`preconnection::make_context()` 会抛出 `std::system_error`，错误信息指明加载失败的文件路径和底层原因，服务器启动随之失败，而不是回退到自签名证书。同理，客户端显式指定的 `net::tls::ca_bundle(...)` 加载失败也会立即抛错；只有默认信任存储（隐式增强）加载失败时才会被容忍。
 
 ## 4. 公网部署建议
 

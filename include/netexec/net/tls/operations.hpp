@@ -126,6 +126,33 @@ inline constexpr struct async_initiate_t {
 
         co_return stream(std::move(*sock), std::move(session));
     }
+
+    // Upgrade an already-connected TCP socket into a tls stream.  No name
+    // resolution or TCP connect is performed; when pre.secure() is true a
+    // client-side TLS handshake is driven over the socket (the TLS
+    // configuration still comes from the preconnection's environment), with
+    // secure=false the socket is simply wrapped without a handshake.
+    //
+    // The TLS context is a local that is destroyed once the handshake
+    // completes; backends must not depend on it afterwards (the same
+    // assumption as the io_context overload above).
+    auto operator()(const preconnection& pre, ip::tcp::socket sock) const
+        -> exec::task<stream> {
+        std::unique_ptr<__detail::session_base> session;
+        if (pre.secure()) {
+            auto context = pre.make_context();
+            if (!context) {
+                throw std::runtime_error("failed to create TLS context");
+            }
+            session = context->create_client_session();
+            if (!session) {
+                throw std::runtime_error("failed to create TLS client session");
+            }
+            co_await __detail::run_handshake(sock, *session);
+        }
+
+        co_return stream(std::move(sock), std::move(session));
+    }
 } async_initiate{};
 
 inline constexpr struct async_listen_t {
