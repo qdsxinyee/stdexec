@@ -12,6 +12,7 @@ TEST_CASE("netexec - address_v4 constants", "[netexec][endpoint]") {
     CHECK(loop.is_loopback());
     CHECK(!any.is_loopback());
     CHECK(!loop.is_unspecified());
+    CHECK(!broadcast.is_unspecified());
 }
 
 TEST_CASE("netexec - tcp endpoint construction", "[netexec][endpoint]") {

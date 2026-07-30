@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 // Example of the high-level TAPS API in netexec::net::tls.
-// TLS is explicitly disabled because it is not yet implemented.
+// TLS is explicitly disabled (plaintext) so it can talk to a plain HTTP
+// server; set tls::secure(true) for TLS.
 
 #include <netexec/net.hpp>
 #include <netexec/net/tls.hpp>
@@ -19,16 +20,25 @@ int main(int, char*[]) {
     std::cout << std::unitbuf;
 
     try {
-        net::io_context ctx;
+        // netexec::scope drives the io_context event loop (scope.run()) and
+        // returns once all spawned work has drained.
+        netexec::scope scope;
+        auto&          ctx = scope.get_context();
 
         auto remote = ex::env{
             net::hostname("localhost"),
             net::port(12345),
-            tls::secure(false) // TLS not implemented in Phase 3
+            tls::secure(false) // plaintext; use tls::secure(true) for TLS
         };
         tls::preconnection pre(remote);
 
-        auto task = [&]() -> exec::task<void> {
+        // NOTE: the lambda is captureless on purpose.  A coroutine lambda's
+        // closure object is a temporary that dies at the end of the statement,
+        // while the coroutine only starts when spawned below; capturing [&]
+        // would leave the coroutine body accessing a dead closure
+        // (stack-use-after-scope).  Reference parameters are stored in the
+        // coroutine frame instead, and pre/ctx outlive the coroutine.
+        auto client = [](tls::preconnection& pre, net::io_context& ctx) -> exec::task<void> {
             tls::stream conn = co_await tls::async_initiate(pre, ctx);
 
             std::string request =
@@ -45,12 +55,15 @@ int main(int, char*[]) {
             std::cout << "received " << reply.size() << " bytes\n";
             std::cout.write(reinterpret_cast<const char*>(reply.data()),
                             static_cast<std::streamsize>(reply.size()));
-        }() | ex::upon_error([](auto&& e) noexcept {
-            std::cout << "connection error\n";
-            (void)e;
-        });
+        };
 
-        ex::sync_wait(std::move(task));
+        ex::spawn(
+            client(pre, ctx) | ex::upon_error([](auto&&) noexcept {
+                std::cout << "connection error\n";
+            }),
+            scope.get_token());
+
+        ex::sync_wait(scope.run());
     } catch (const std::exception& e) {
         std::cout << "exception: " << e.what() << "\n";
     }

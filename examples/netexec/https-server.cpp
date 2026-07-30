@@ -15,18 +15,41 @@
 #include <exec/task.hpp>
 #include <stdexec/execution.hpp>
 
+#include <exception>
 #include <iostream>
 #include <string>
 #include <fstream>
 #include <sstream>
 #include <string_view>
+#include <type_traits>
 #include <unordered_map>
+#include <utility>
 
 namespace ex  = stdexec;
 namespace net = netexec::net;
 namespace tls = netexec::net::tls;
 
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// log_spawn_error — report errors delivered to a sender's error channel
+// instead of silently dropping them (a failed bind would otherwise make the
+// server exit without any output).
+// ---------------------------------------------------------------------------
+
+auto log_spawn_error(const char* what) {
+    return [what](auto&& error) noexcept {
+        try {
+            if constexpr (std::is_same_v<std::decay_t<decltype(error)>, std::exception_ptr>) {
+                std::rethrow_exception(error);
+            }
+        } catch (const std::exception& e) {
+            std::cerr << what << " failed: " << e.what() << '\n' << std::flush;
+        } catch (...) {
+            std::cerr << what << " failed with an unknown error\n" << std::flush;
+        }
+    };
+}
 
 std::unordered_map<std::string, std::string> files{
     {"/",            "data/index.html"},
@@ -162,10 +185,10 @@ auto run_server(netexec::scope& scope) -> exec::task<void> {
     std::cout << "listening on https://localhost:" << pre_v4.port() << "/ (IPv4 + IPv6)\n" << std::flush;
 
     ex::spawn(
-        accept_loop(scope, std::move(acceptor_v4), "IPv4") | ex::upon_error([](auto&&) noexcept {}),
+        accept_loop(scope, std::move(acceptor_v4), "IPv4") | ex::upon_error(log_spawn_error("IPv4 accept loop")),
         scope.get_token());
     ex::spawn(
-        accept_loop(scope, std::move(acceptor_v6), "IPv6") | ex::upon_error([](auto&&) noexcept {}),
+        accept_loop(scope, std::move(acceptor_v6), "IPv6") | ex::upon_error(log_spawn_error("IPv6 accept loop")),
         scope.get_token());
 }
 
@@ -178,7 +201,7 @@ auto main() -> int {
         netexec::scope scope;
 
         ex::spawn(
-            run_server(scope) | ex::upon_error([](auto&&) noexcept {}),
+            run_server(scope) | ex::upon_error(log_spawn_error("server startup")),
             scope.get_token());
 
         ex::sync_wait(scope.run());

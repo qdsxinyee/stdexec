@@ -55,6 +55,14 @@ class netexec::socket_base {
         explicit reuse_address(bool value) : socket_option(value) {}
         explicit operator bool() const { return this->value(); }
     };
+    // Restrict an IPv6 socket to IPv6 traffic only.  This matches the Windows
+    // default and lets an IPv4 acceptor and an IPv6 acceptor bind the same
+    // port side by side (Linux IPv6 sockets are dual-stack by default).
+    class ipv6_only : public socket_option<int, IPPROTO_IPV6, IPV6_V6ONLY> {
+      public:
+        explicit ipv6_only(bool value) : socket_option(value) {}
+        explicit operator bool() const { return this->value(); }
+    };
     class send_buffer_size;
     class send_low_watermark;
 

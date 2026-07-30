@@ -94,6 +94,19 @@ class netexec::basic_socket_acceptor : public ::netexec::socket_base {
             error = ::std::error_code(int(socket_errc::already_open), ::netexec::socket_category());
         }
         this->d_id = this->d_context.make_socket(p.family(), p.type(), p.protocol(), error);
+#if !defined(_WIN32)
+        if (!error) {
+            // POSIX: allow rebinding a port whose previous connections are
+            // still in TIME_WAIT.  Windows permits this by default, and
+            // SO_REUSEADDR has different (weaker) semantics there.
+            this->set_option(::netexec::socket_base::reuse_address(true), error);
+        }
+#endif
+        if (!error && p.family() == AF_INET6) {
+            // Keep the IPv6 acceptor v6-only (the Windows default) so it can
+            // coexist with an IPv4 acceptor bound to the same port.
+            this->set_option(::netexec::socket_base::ipv6_only(true), error);
+        }
     }
     void               assign(const protocol_type&, const native_handle_type&);
     void               assign(const protocol_type&, const native_handle_type&, ::std::error_code&);

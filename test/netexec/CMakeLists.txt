@@ -34,6 +34,11 @@ set_target_properties(test.netexec PROPERTIES
 # test-wide STDEXEC_NAMESPACE=std::execution definition from common_test_settings.
 target_include_directories(test.netexec PRIVATE "${CMAKE_SOURCE_DIR}/test")
 
+# GCC emits -Wmaybe-uninitialized false positives from coroutine frames here,
+# same as handled project-wide in common_test_settings (test/CMakeLists.txt).
+target_compile_options(test.netexec PRIVATE
+    $<$<CXX_COMPILER_ID:GNU>:-Wno-maybe-uninitialized>)
+
 target_link_libraries(test.netexec
     PUBLIC
     STDEXEC::stdexec
