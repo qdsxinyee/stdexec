@@ -64,8 +64,14 @@ auto main() -> int
   try
   {
     net::io_context ctx;
-    auto            scheduler = ctx.get_scheduler();
 
+    // when_all starts its children in declaration order, and schedule()'s
+    // start() posts to the io_context synchronously, so the task is already
+    // queued when async_run() starts driving the loop.  Driving the loop
+    // from within the let_async_scope function would deadlock instead: the
+    // function only runs after the predecessor completes, and the
+    // predecessor only completes once the loop is running.
+    //
     // let_async_scope creates an internal counting_scope. The lambda receives
     // a scope token; everything spawned through that token is joined before
     // the returned sender completes. If any spawned work errors, the recorded
@@ -73,14 +79,15 @@ auto main() -> int
     // Using schedule(scheduler) as the predecessor gives let_async_scope a
     // scheduler env, which it propagates to spawned work automatically.
     // The function may return void (P3296R6) instead of a sender.
-    ex::sync_wait(ex::schedule(scheduler)
-                  | ex::let_async_scope(
-                    [&](auto token)
-                    {
-                      ex::spawn(accept_client(ctx, token) | ex::upon_error([](auto&&) noexcept { }),
-                                token);
-                      ex::spawn(ctx.async_run(), token);
-                    }));
+    ex::sync_wait(ex::when_all(
+                    ex::schedule(ctx.get_scheduler())
+                      | ex::let_async_scope(
+                        [&](auto token)
+                        {
+                          ex::spawn(accept_client(ctx, token) | ex::upon_error([](auto&&) noexcept { }),
+                                    token);
+                        }),
+                    ctx.async_run()));
   }
   catch (std::exception const & e)
   {
