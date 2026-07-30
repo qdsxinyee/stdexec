@@ -1,8 +1,8 @@
-// include/beman/net/detail/basic_socket_acceptor.hpp               -*-C++-*-
+// include/netexec/__detail/basic_socket_acceptor.hpp           -*-C++-*-
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
-#ifndef INCLUDED_BEMAN_NET_DETAIL_BASIC_SOCKET_ACCEPTOR
-#define INCLUDED_BEMAN_NET_DETAIL_BASIC_SOCKET_ACCEPTOR
+#ifndef INCLUDED_NETEXEC_DETAIL_BASIC_SOCKET_ACCEPTOR
+#define INCLUDED_NETEXEC_DETAIL_BASIC_SOCKET_ACCEPTOR
 
 #include <netexec/__detail/io_context.hpp>
 #include <netexec/__detail/socket_category.hpp>

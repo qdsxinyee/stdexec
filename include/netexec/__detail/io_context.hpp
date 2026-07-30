@@ -1,9 +1,9 @@
 #include <cassert>
-// include/beman/net/detail/io_context.hpp                          -*-C++-*-
+// include/netexec/__detail/io_context.hpp                      -*-C++-*-
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
-#ifndef INCLUDED_BEMAN_NET_DETAIL_IO_CONTEXT
-#define INCLUDED_BEMAN_NET_DETAIL_IO_CONTEXT
+#ifndef INCLUDED_NETEXEC_DETAIL_IO_CONTEXT
+#define INCLUDED_NETEXEC_DETAIL_IO_CONTEXT
 #include <netexec/__detail/netexec_detail.hpp>
 
 // ----------------------------------------------------------------------------

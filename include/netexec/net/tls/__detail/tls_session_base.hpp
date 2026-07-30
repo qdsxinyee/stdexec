@@ -1,8 +1,8 @@
-// include/beman/net/detail/tls/tls_session_base.hpp                   -*-C++-*-
+// include/netexec/net/tls/__detail/tls_session_base.hpp        -*-C++-*-
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
-#ifndef INCLUDED_INCLUDE_BEMAN_NET_DETAIL_TLS_TLS_SESSION_BASE
-#define INCLUDED_INCLUDE_BEMAN_NET_DETAIL_TLS_TLS_SESSION_BASE
+#ifndef INCLUDED_INCLUDE_NETEXEC_DETAIL_TLS_TLS_SESSION_BASE
+#define INCLUDED_INCLUDE_NETEXEC_DETAIL_TLS_TLS_SESSION_BASE
 
 #include <cstddef>
 #include <span>

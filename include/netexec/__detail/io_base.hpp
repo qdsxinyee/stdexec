@@ -1,8 +1,8 @@
-// include/beman/net/detail/io_base.hpp                             -*-C++-*-
+// include/netexec/__detail/io_base.hpp                         -*-C++-*-
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
-#ifndef INCLUDED_BEMAN_NET_DETAIL_IO_BASE
-#define INCLUDED_BEMAN_NET_DETAIL_IO_BASE
+#ifndef INCLUDED_NETEXEC_DETAIL_IO_BASE
+#define INCLUDED_NETEXEC_DETAIL_IO_BASE
 
 #include <netexec/__detail/netfwd.hpp>
 #include <netexec/__detail/event_type.hpp>

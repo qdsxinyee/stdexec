@@ -1,8 +1,8 @@
-// include/beman/net/detail/into_expected.hpp                         -*-C++-*-
+// include/netexec/__detail/into_expected.hpp                   -*-C++-*-
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
-#ifndef INCLUDED_INCLUDE_BEMAN_NET_DETAIL_INTO_EXPECTED
-#define INCLUDED_INCLUDE_BEMAN_NET_DETAIL_INTO_EXPECTED
+#ifndef INCLUDED_INCLUDE_NETEXEC_DETAIL_INTO_EXPECTED
+#define INCLUDED_INCLUDE_NETEXEC_DETAIL_INTO_EXPECTED
 #include <netexec/__detail/netexec_detail.hpp>
 
 #include <concepts>

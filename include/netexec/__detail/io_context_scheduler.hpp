@@ -1,8 +1,8 @@
-// include/beman/net/detail/io_context_scheduler.hpp                -*-C++-*-
+// include/netexec/__detail/io_context_scheduler.hpp            -*-C++-*-
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
-#ifndef INCLUDED_BEMAN_NET_DETAIL_IO_CONTEXT_SCHEDULER
-#define INCLUDED_BEMAN_NET_DETAIL_IO_CONTEXT_SCHEDULER
+#ifndef INCLUDED_NETEXEC_DETAIL_IO_CONTEXT_SCHEDULER
+#define INCLUDED_NETEXEC_DETAIL_IO_CONTEXT_SCHEDULER
 
 // ----------------------------------------------------------------------------
 

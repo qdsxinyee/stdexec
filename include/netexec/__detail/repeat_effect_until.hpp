@@ -1,8 +1,8 @@
-// include/beman/net/detail/repeat_effect_until.hpp                   -*-C++-*-
+// include/netexec/__detail/repeat_effect_until.hpp             -*-C++-*-
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
-#ifndef INCLUDED_INCLUDE_BEMAN_NET_DETAIL_REPEAT_EFFECT_UNTIL
-#define INCLUDED_INCLUDE_BEMAN_NET_DETAIL_REPEAT_EFFECT_UNTIL
+#ifndef INCLUDED_INCLUDE_NETEXEC_DETAIL_REPEAT_EFFECT_UNTIL
+#define INCLUDED_INCLUDE_NETEXEC_DETAIL_REPEAT_EFFECT_UNTIL
 #include <netexec/__detail/netexec_detail.hpp>
 
 #include <optional>

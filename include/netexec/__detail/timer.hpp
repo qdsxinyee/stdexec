@@ -1,8 +1,8 @@
-// include/beman/net/detail/timer.hpp                               -*-C++-*-
+// include/netexec/__detail/timer.hpp                           -*-C++-*-
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
-#ifndef INCLUDED_BEMAN_NET_DETAIL_TIMER
-#define INCLUDED_BEMAN_NET_DETAIL_TIMER
+#ifndef INCLUDED_NETEXEC_DETAIL_TIMER
+#define INCLUDED_NETEXEC_DETAIL_TIMER
 
 // ----------------------------------------------------------------------------
 

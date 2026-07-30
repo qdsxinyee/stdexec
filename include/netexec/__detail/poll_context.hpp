@@ -1,8 +1,8 @@
-// include/beman/net/detail/poll_context.hpp                        -*-C++-*-
+// include/netexec/__detail/poll_context.hpp                    -*-C++-*-
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
-#ifndef INCLUDED_BEMAN_NET_DETAIL_POLL_CONTEXT
-#define INCLUDED_BEMAN_NET_DETAIL_POLL_CONTEXT
+#ifndef INCLUDED_NETEXEC_DETAIL_POLL_CONTEXT
+#define INCLUDED_NETEXEC_DETAIL_POLL_CONTEXT
 
 // ----------------------------------------------------------------------------
 

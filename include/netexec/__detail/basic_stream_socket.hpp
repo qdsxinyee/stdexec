@@ -1,8 +1,8 @@
-// include/beman/net/detail/basic_stream_socket.hpp                 -*-C++-*-
+// include/netexec/__detail/basic_stream_socket.hpp             -*-C++-*-
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
-#ifndef INCLUDED_BEMAN_NET_DETAIL_BASIC_STREAM_SOCKET
-#define INCLUDED_BEMAN_NET_DETAIL_BASIC_STREAM_SOCKET
+#ifndef INCLUDED_NETEXEC_DETAIL_BASIC_STREAM_SOCKET
+#define INCLUDED_NETEXEC_DETAIL_BASIC_STREAM_SOCKET
 
 // ----------------------------------------------------------------------------
 

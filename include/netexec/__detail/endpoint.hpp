@@ -1,8 +1,8 @@
-// include/beman/net/detail/endpoint.hpp                            -*-C++-*-
+// include/netexec/__detail/endpoint.hpp                        -*-C++-*-
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
-#ifndef INCLUDED_BEMAN_NET_DETAIL_ENDPOINT
-#define INCLUDED_BEMAN_NET_DETAIL_ENDPOINT
+#ifndef INCLUDED_NETEXEC_DETAIL_ENDPOINT
+#define INCLUDED_NETEXEC_DETAIL_ENDPOINT
 
 #include <netexec/__detail/platform.hpp>
 #include <algorithm>

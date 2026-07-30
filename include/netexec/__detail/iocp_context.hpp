@@ -1,8 +1,8 @@
-// include/beman/net/detail/iocp_context.hpp                        -*-C++-*-
+// include/netexec/__detail/iocp_context.hpp                    -*-C++-*-
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
-#ifndef INCLUDED_BEMAN_NET_DETAIL_IOCP_CONTEXT
-#define INCLUDED_BEMAN_NET_DETAIL_IOCP_CONTEXT
+#ifndef INCLUDED_NETEXEC_DETAIL_IOCP_CONTEXT
+#define INCLUDED_NETEXEC_DETAIL_IOCP_CONTEXT
 
 #pragma message("netexec: compiling with IOCP backend")
 

@@ -1,8 +1,8 @@
-// include/beman/net/detail/get_scope_token.hpp                       -*-C++-*-
+// include/netexec/__detail/get_scope_token.hpp                 -*-C++-*-
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
-#ifndef INCLUDED_INCLUDE_BEMAN_NET_DETAIL_GET_SCOPE_TOKEN
-#define INCLUDED_INCLUDE_BEMAN_NET_DETAIL_GET_SCOPE_TOKEN
+#ifndef INCLUDED_INCLUDE_NETEXEC_DETAIL_GET_SCOPE_TOKEN
+#define INCLUDED_INCLUDE_NETEXEC_DETAIL_GET_SCOPE_TOKEN
 #include <netexec/__detail/netexec_detail.hpp>
 
 

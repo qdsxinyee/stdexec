@@ -1,8 +1,8 @@
-// include/beman/net/detail/sorted_list.hpp                           -*-C++-*-
+// include/netexec/__detail/sorted_list.hpp                     -*-C++-*-
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
-#ifndef INCLUDED_BEMAN_NET_DETAIL_SORTED_LIST
-#define INCLUDED_BEMAN_NET_DETAIL_SORTED_LIST
+#ifndef INCLUDED_NETEXEC_DETAIL_SORTED_LIST
+#define INCLUDED_NETEXEC_DETAIL_SORTED_LIST
 
 #include <functional>
 #include <type_traits>

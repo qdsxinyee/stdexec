@@ -1,8 +1,8 @@
-// include/beman/net/detail/event_type.hpp                            -*-C++-*-
+// include/netexec/__detail/event_type.hpp                      -*-C++-*-
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
-#ifndef INCLUDED_INCLUDE_BEMAN_NET_DETAIL_EVENT_TYPE
-#define INCLUDED_INCLUDE_BEMAN_NET_DETAIL_EVENT_TYPE
+#ifndef INCLUDED_INCLUDE_NETEXEC_DETAIL_EVENT_TYPE
+#define INCLUDED_INCLUDE_NETEXEC_DETAIL_EVENT_TYPE
 
 #include <cinttypes>
 

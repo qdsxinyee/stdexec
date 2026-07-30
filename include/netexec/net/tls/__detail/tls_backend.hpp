@@ -1,8 +1,8 @@
-// include/beman/net/detail/tls/tls_backend.hpp                        -*-C++-*-
+// include/netexec/net/tls/__detail/tls_backend.hpp             -*-C++-*-
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
-#ifndef INCLUDED_INCLUDE_BEMAN_NET_DETAIL_TLS_TLS_BACKEND
-#define INCLUDED_INCLUDE_BEMAN_NET_DETAIL_TLS_TLS_BACKEND
+#ifndef INCLUDED_INCLUDE_NETEXEC_DETAIL_TLS_TLS_BACKEND
+#define INCLUDED_INCLUDE_NETEXEC_DETAIL_TLS_TLS_BACKEND
 
 // ----------------------------------------------------------------------------
 // TLS backend selection macros.

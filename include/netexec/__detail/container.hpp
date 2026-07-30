@@ -1,9 +1,9 @@
 #include <utility>
-// include/beman/net/detail/container.hpp                           -*-C++-*-
+// include/netexec/__detail/container.hpp                       -*-C++-*-
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
-#ifndef INCLUDED_BEMAN_NET_DETAIL_CONTAINER
-#define INCLUDED_BEMAN_NET_DETAIL_CONTAINER
+#ifndef INCLUDED_NETEXEC_DETAIL_CONTAINER
+#define INCLUDED_NETEXEC_DETAIL_CONTAINER
 
 #include <netexec/__detail/netfwd.hpp>
 #include <cstddef>

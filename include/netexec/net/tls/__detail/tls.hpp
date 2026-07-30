@@ -1,8 +1,8 @@
-// include/beman/net/detail/tls/tls.hpp                               -*-C++-*-
+// include/netexec/net/tls/__detail/tls.hpp                     -*-C++-*-
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
-#ifndef INCLUDED_INCLUDE_BEMAN_NET_DETAIL_TLS_TLS
-#define INCLUDED_INCLUDE_BEMAN_NET_DETAIL_TLS_TLS
+#ifndef INCLUDED_INCLUDE_NETEXEC_DETAIL_TLS_TLS
+#define INCLUDED_INCLUDE_NETEXEC_DETAIL_TLS_TLS
 
 // ----------------------------------------------------------------------------
 // Top-level TLS header. Selects the concrete backend based on platform macros

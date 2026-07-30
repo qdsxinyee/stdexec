@@ -1,8 +1,8 @@
-// include/beman/net/detail/socket_base.hpp                         -*-C++-*-
+// include/netexec/__detail/socket_base.hpp                     -*-C++-*-
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
-#ifndef INCLUDED_BEMAN_NET_DETAIL_SOCKET_BASE
-#define INCLUDED_BEMAN_NET_DETAIL_SOCKET_BASE
+#ifndef INCLUDED_NETEXEC_DETAIL_SOCKET_BASE
+#define INCLUDED_NETEXEC_DETAIL_SOCKET_BASE
 
 // ----------------------------------------------------------------------------
 

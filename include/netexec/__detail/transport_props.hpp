@@ -1,8 +1,8 @@
-// include/beman/net/detail/transport_props.hpp                       -*-C++-*-
+// include/netexec/__detail/transport_props.hpp                 -*-C++-*-
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
-#ifndef INCLUDED_INCLUDE_BEMAN_NET_DETAIL_TRANSPORT_PROPS
-#define INCLUDED_INCLUDE_BEMAN_NET_DETAIL_TRANSPORT_PROPS
+#ifndef INCLUDED_INCLUDE_NETEXEC_DETAIL_TRANSPORT_PROPS
+#define INCLUDED_INCLUDE_NETEXEC_DETAIL_TRANSPORT_PROPS
 
 #include <netexec/__detail/transport_preference.hpp>
 

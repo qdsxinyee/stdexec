@@ -1,9 +1,9 @@
-// include/beman/net/detail/platform.hpp                              -*-C++-*-
+// include/netexec/__detail/platform.hpp                        -*-C++-*-
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 // ----------------------------------------------------------------------------
 
-#ifndef INCLUDED_INCLUDE_BEMAN_NET_DETAIL_PLATFORM
-#define INCLUDED_INCLUDE_BEMAN_NET_DETAIL_PLATFORM
+#ifndef INCLUDED_INCLUDE_NETEXEC_DETAIL_PLATFORM
+#define INCLUDED_INCLUDE_NETEXEC_DETAIL_PLATFORM
 
 // ----------------------------------------------------------------------------
 // This header is the single point of platform abstraction for netexec.

@@ -1,10 +1,10 @@
-// include/beman/net/detail/operations.hpp                          -*-C++-*-
+// include/netexec/__detail/operations.hpp                      -*-C++-*-
 // ----------------------------------------------------------------------------
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 // ----------------------------------------------------------------------------
 
-#ifndef INCLUDED_INCLUDE_BEMAN_NET_DETAIL_OPERATIONS
-#define INCLUDED_INCLUDE_BEMAN_NET_DETAIL_OPERATIONS
+#ifndef INCLUDED_INCLUDE_NETEXEC_DETAIL_OPERATIONS
+#define INCLUDED_INCLUDE_NETEXEC_DETAIL_OPERATIONS
 
 #include <netexec/__detail/context_base.hpp>
 #include <netexec/__detail/event_type.hpp>
