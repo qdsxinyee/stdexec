@@ -11,7 +11,13 @@
 #include <netexec/__detail/container.hpp>
 #include <netexec/__detail/context_base.hpp>
 #include <netexec/__detail/sorted_list.hpp>
+#if !defined(_MSC_VER)
+#  include <sys/eventfd.h>
+#endif
+#include <cstdint>
+#include <mutex>
 #include <vector>
+#include <algorithm>
 #include <iostream>
 
 // ----------------------------------------------------------------------------
@@ -59,6 +65,34 @@ struct netexec::detail::poll_context final : ::netexec::detail::context_base {
     ::std::vector<::netexec::detail::io_base*>                      d_outstanding;
     timer_priority_t                                                   d_timeouts;
     ::netexec::detail::context_base::task*                          d_tasks{};
+    ::std::mutex                                                        d_tasks_mutex;
+#if !defined(_MSC_VER)
+    // eventfd used to wake the polling thread when work is posted from other
+    // threads (e.g. the blocking thread pool).  It is kept in d_poll as a
+    // permanent entry whose d_outstanding slot is a nullptr sentinel.
+    int d_wakeup_fd{-1};
+#endif
+
+#if !defined(_MSC_VER)
+    poll_context() {
+        this->d_wakeup_fd = ::eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
+        if (this->d_wakeup_fd >= 0) {
+            this->d_poll.emplace_back(::pollfd{this->d_wakeup_fd, static_cast<short>(POLLIN), short()});
+            this->d_outstanding.emplace_back(nullptr);
+        }
+    }
+    ~poll_context() override {
+        if (this->d_wakeup_fd >= 0) {
+            ::close(this->d_wakeup_fd);
+        }
+    }
+
+    auto drain_wakeup() -> void {
+        ::std::uint64_t value{};
+        while (::read(this->d_wakeup_fd, &value, sizeof(value)) == sizeof(value)) {
+        }
+    }
+#endif
 
     auto make_socket(::netexec::detail::native_handle_type handle) -> ::netexec::detail::socket_id override final {
         return this->d_sockets.insert(handle);
@@ -123,9 +157,15 @@ struct netexec::detail::poll_context final : ::netexec::detail::context_base {
     }
 
     auto process_task() -> ::std::size_t {
-        if (this->d_tasks) {
-            auto* tsk{this->d_tasks};
-            this->d_tasks = tsk->next;
+        ::netexec::detail::context_base::task* tsk;
+        {
+            ::std::lock_guard lock(this->d_tasks_mutex);
+            tsk = this->d_tasks;
+            if (tsk != nullptr) {
+                this->d_tasks = tsk->next;
+            }
+        }
+        if (tsk != nullptr) {
             tsk->complete();
             return 1u;
         }
@@ -154,7 +194,13 @@ struct netexec::detail::poll_context final : ::netexec::detail::context_base {
         if (0u < this->process_timeout(now) || 0 < this->process_task()) {
             return 1u;
         }
-        if (this->d_poll.empty() && this->d_timeouts.empty() && this->work_count.load() == 0u) {
+        // The wake-up fd keeps a permanent entry with a nullptr outstanding
+        // slot; "no work" means no real sockets left.
+        const bool have_sockets =
+            ::std::any_of(this->d_outstanding.begin(), this->d_outstanding.end(), [](auto* o) {
+                return o != nullptr;
+            });
+        if (!have_sockets && this->d_timeouts.empty() && this->work_count.load() == 0u) {
             return ::std::size_t{};
         }
         while (true) {
@@ -184,6 +230,14 @@ struct netexec::detail::poll_context final : ::netexec::detail::context_base {
                 for (::std::size_t i(this->d_poll.size()); 0 < i--;) {
                     if (this->d_poll[i].revents & (this->d_poll[i].events | POLLERR)) {
                         ::netexec::detail::io_base* completion = this->d_outstanding[i];
+#if !defined(_MSC_VER)
+                        if (completion == nullptr) {
+                            // Wake-up fd: drain it and re-enter run_one() so the
+                            // tasks posted from other threads get processed.
+                            this->drain_wakeup();
+                            return ::std::size_t(1);
+                        }
+#endif
                         this->remove_outstanding(i);
                         completion->work(*this, completion);
                         return ::std::size_t(1);
@@ -197,7 +251,14 @@ struct netexec::detail::poll_context final : ::netexec::detail::context_base {
         return ::std::size_t{};
     }
     auto wakeup() -> void {
-        //-dk:TODO wake-up polling thread
+#if !defined(_MSC_VER)
+        if (this->d_wakeup_fd >= 0) {
+            const ::std::uint64_t one = 1;
+            // Failure (e.g. EAGAIN on a full counter) means the polling thread
+            // is already being woken up; nothing more to do.
+            (void)::write(this->d_wakeup_fd, &one, sizeof(one));
+        }
+#endif
     }
     auto wake() -> void override { this->wakeup(); }
 
@@ -256,8 +317,12 @@ struct netexec::detail::poll_context final : ::netexec::detail::context_base {
         }
     }
     auto schedule(::netexec::detail::context_base::task* tsk) -> void override {
-        tsk->next     = this->d_tasks;
-        this->d_tasks = tsk;
+        {
+            ::std::lock_guard lock(this->d_tasks_mutex);
+            tsk->next     = this->d_tasks;
+            this->d_tasks = tsk;
+        }
+        this->wakeup();
     }
     auto poll(::netexec::detail::context_base::poll_operation* op)
         -> ::netexec::detail::submit_result override final {
