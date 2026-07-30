@@ -218,8 +218,70 @@ namespace STDEXEC
       }
     };
 
+    // nest: run a sender while holding an association on the scope, so the
+    // scope's join() cannot complete before the nested sender does. The
+    // association is released as soon as the nested sender completes.
+    template <class _Rcvr, class _Assoc>
+    struct __nest_rcvr
+    {
+      using receiver_concept = receiver_tag;
+
+      _Rcvr  __rcvr_;
+      _Assoc __assoc_;
+
+      template <class... _Args>
+      void set_value(_Args&&... __args) && noexcept
+      {
+        __assoc_ = _Assoc{};
+        STDEXEC::set_value(static_cast<_Rcvr&&>(__rcvr_), static_cast<_Args&&>(__args)...);
+      }
+
+      template <class _Error>
+      void set_error(_Error&& __err) && noexcept
+      {
+        __assoc_ = _Assoc{};
+        STDEXEC::set_error(static_cast<_Rcvr&&>(__rcvr_), static_cast<_Error&&>(__err));
+      }
+
+      void set_stopped() && noexcept
+      {
+        __assoc_ = _Assoc{};
+        STDEXEC::set_stopped(static_cast<_Rcvr&&>(__rcvr_));
+      }
+
+      [[nodiscard]]
+      auto get_env() const noexcept -> decltype(STDEXEC::get_env(__rcvr_))
+      {
+        return STDEXEC::get_env(__rcvr_);
+      }
+    };
+
+    template <class _Sndr, class _Assoc>
+    struct __nest_sender
+    {
+      using sender_concept = sender_tag;
+
+      template <class _Self, class... _Env>
+      static consteval auto get_completion_signatures()
+      {
+        return STDEXEC::get_completion_signatures<__copy_cvref_t<_Self, _Sndr>, _Env...>();
+      }
+
+      template <class _Rcvr>
+      auto connect(_Rcvr&& __rcvr) &&
+      {
+        return STDEXEC::connect(
+          static_cast<_Sndr&&>(__sndr_),
+          __nest_rcvr<__decay_t<_Rcvr>, _Assoc>{static_cast<_Rcvr&&>(__rcvr),
+                                                static_cast<_Assoc&&>(__assoc_)});
+      }
+
+      _Sndr  __sndr_;
+      _Assoc __assoc_;
+    };
+
     template <class _Sndr,
-              class _WrappedFn,
+              class _BindFn,
               class _Rcvr,
               class _StateEnv,
               class _Env,
@@ -369,21 +431,25 @@ namespace STDEXEC
       }
     };
 
+    // The operation state. The predecessor runs through let_value with a
+    // binding function that, when the predecessor completes with values,
+    // eagerly applies the user's function, nests the resulting sender on the
+    // scope, and joins the scope (see __sender::connect). Because the function
+    // is applied and the nest association is taken before join() starts, work
+    // spawned through the scope token is always registered with the scope
+    // before it can be joined, so join() waits for it.
     template <class _Sndr,
-              class _WrappedFn,
+              class _BindFn,
               class _Rcvr,
               class _StateEnv,
               class _Env,
               class... _Errors>
     struct __opstate
     {
-      using _BaseEnv = __fwd_env_t<__decay_t<env_of_t<_Rcvr>>>;
-      using _State   = __state<_StateEnv, _Errors...>;
-      using _Rcvr2   = __receiver<_Rcvr, _State>;
+      using _State = __state<_StateEnv, _Errors...>;
+      using _Rcvr2 = __receiver<_Rcvr, _State>;
 
-      using _Composed = decltype(STDEXEC::when_all(STDEXEC::let_value(__declval<_Sndr>(),
-                                                                      __declval<_WrappedFn>()),
-                                                   __declval<_State&>().join()));
+      using _Composed = decltype(STDEXEC::let_value(__declval<_Sndr>(), __declval<_BindFn>()));
       using _Op       = connect_result_t<_Composed, _Rcvr2>;
 
       struct __request_stop
@@ -398,16 +464,14 @@ namespace STDEXEC
 
       using __stop_callback_t = stop_callback_for_t<stop_token_of_t<_Env>, __request_stop>;
 
-      template <class _S, class _W, class _R>
-      __opstate(_S&& __sndr, _W&& __wrapped, _R&& __rcvr, std::shared_ptr<_State> __state)
+      template <class _S, class _B, class _R>
+      __opstate(_S&& __sndr, _B&& __bind, _R&& __rcvr, std::shared_ptr<_State> __state)
         : __state_(std::move(__state))
         , __rcvr_(static_cast<_R&&>(__rcvr))
         , __stop_token_(get_stop_token(__env::__join(__state_->__env_, STDEXEC::get_env(__rcvr_))))
-        , __wrapped_(static_cast<_W&&>(__wrapped))
-        , __op_(STDEXEC::connect(STDEXEC::when_all(STDEXEC::let_value(static_cast<_S&&>(__sndr),
-                                                                      static_cast<_WrappedFn&&>(
-                                                                        __wrapped_)),
-                                                   __state_->join()),
+        , __bind_(static_cast<_B&&>(__bind))
+        , __op_(STDEXEC::connect(STDEXEC::let_value(static_cast<_S&&>(__sndr),
+                                                    static_cast<_BindFn&&>(__bind_)),
                                  _Rcvr2{__rcvr_, __state_}))
       { }
 
@@ -426,7 +490,7 @@ namespace STDEXEC
       std::shared_ptr<_State>          __state_;
       _Rcvr                            __rcvr_;
       stop_token_of_t<_Env>            __stop_token_;
-      _WrappedFn                       __wrapped_;
+      _BindFn                          __bind_;
       std::optional<__stop_callback_t> __on_stop_;
       _Op                              __op_;
     };
@@ -543,12 +607,31 @@ namespace STDEXEC
           }
         };
 
-        using _Wrapped = __decay_t<decltype(__wrapped)>;
+        // let-async-scope-bind (P3296R6): apply the function, nest the
+        // resulting sender on the scope by holding an association on the scope
+        // for as long as the sender runs, and only then start the scope's
+        // join(). Applying the function and taking the association before
+        // join() starts ensures that work spawned through the token -- by the
+        // function itself, or through a copy of the token while the function's
+        // sender runs -- registers with the scope before it can be joined, so
+        // join() waits for it instead of completing with the work in flight.
+        auto __bind = [__wrapped = std::move(__wrapped), __state](auto&&... __args) mutable
+        {
+          auto __sndr2  = __wrapped(static_cast<decltype(__args)&&>(__args)...);
+          auto __assoc  = __state->get_token().try_associate();
+          auto __nested = __state->get_token().wrap(static_cast<decltype(__sndr2)&&>(__sndr2));
+          return STDEXEC::when_all(__nest_sender<decltype(__nested), decltype(__assoc)>{
+                                     static_cast<decltype(__nested)&&>(__nested),
+                                     static_cast<decltype(__assoc)&&>(__assoc)},
+                                   __state->join());
+        };
+
+        using _Bind = __decay_t<decltype(__bind)>;
         using _Opstate =
-          __opstate<_Sndr, _Wrapped, __decay_t<_Receiver>, _LetScopeEnv, _Env, _Errors...>;
+          __opstate<_Sndr, _Bind, __decay_t<_Receiver>, _LetScopeEnv, _Env, _Errors...>;
 
         return _Opstate(static_cast<_Sndr&&>(__sndr_),
-                        std::move(__wrapped),
+                        std::move(__bind),
                         static_cast<_Receiver&&>(__rcvr),
                         std::move(__state));
       }

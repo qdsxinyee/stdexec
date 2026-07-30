@@ -181,4 +181,32 @@ namespace
                       std::runtime_error);
   }
 
+  // Regression test: previously the scope's join() started before the
+  // function was applied, so work spawned inside the function was silently
+  // dropped and nobody waited for it.
+  TEST_CASE("let_async_scope - waits for work spawned on an io scheduler", "[let_async_scope]")
+  {
+    netexec::scope scope;
+    auto&          ctx         = scope.get_context();
+    bool           worker_ran  = false;
+
+    auto worker = [&]() -> exec::task<void> {
+      co_await ex::schedule(ctx.get_scheduler());
+      worker_ran = true;
+    };
+
+    ex::spawn(ex::schedule(scope.get_scheduler())
+                | ex::let_async_scope(
+                  [&](auto token)
+                  {
+                    ex::spawn(worker() | ex::upon_error([](auto&&) noexcept { }), token);
+                    return ex::just();
+                  })
+                | ex::upon_error([](auto&&) noexcept { }),
+              scope.get_token());
+
+    ex::sync_wait(scope.run());
+    REQUIRE(worker_ran);
+  }
+
 }  // namespace
