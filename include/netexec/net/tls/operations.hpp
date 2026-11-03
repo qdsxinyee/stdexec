@@ -50,6 +50,20 @@ inline auto run_handshake(ip::tcp::socket& sock, __detail::session_base& session
         }
 
         if (complete) {
+            // TLS 1.3: the completing call also produces our Finished; send
+            // it or the peer never sees the handshake as done.
+            auto out2 = session.outgoing_data();
+            while (!out2.empty()) {
+                const auto* out_bytes = reinterpret_cast<const char*>(out2.data());
+                std::size_t sent2 = 0;
+                while (sent2 < out2.size()) {
+                    auto n2 = co_await ip::tcp::async_send(
+                        sock, net::buffer(out_bytes + sent2, out2.size() - sent2));
+                    sent2 += n2;
+                }
+                session.consume_outgoing(out2.size());
+                out2 = session.outgoing_data();
+            }
             co_return;
         }
 
@@ -300,6 +314,24 @@ inline constexpr struct async_shutdown_t {
     }
 } async_shutdown{};
 
+namespace __detail {
+
+// After a decrypt call the session may hold a renegotiation token to echo
+// (TLS 1.3 session tickets arrive this way on schannel). Flush it on the
+// socket; without this the token is never sent and the read stalls.
+inline auto flush_session_outgoing(stream& strm) -> exec::task<void> {
+    auto* session = strm.session();
+    if (!session) co_return;
+    auto out = session->outgoing_data();
+    if (out.empty()) co_return;
+    co_await ip::tcp::async_send(
+        strm.socket(),
+        net::buffer(reinterpret_cast<const char*>(out.data()), out.size()));
+    session->consume_outgoing(out.size());
+}
+
+}  // namespace __detail
+
 inline constexpr struct async_receive_some_t {
     // Read and decrypt up to `buffer` bytes of plaintext.  Returns the number
     // of plaintext bytes written (zero means the peer closed the connection).
@@ -317,6 +349,10 @@ inline constexpr struct async_receive_some_t {
             std::size_t written = 0;
             std::error_code ec;
             session->decrypt(nullptr, 0, iov->iov_base, iov->iov_len, written, ec);
+            co_await __detail::flush_session_outgoing(strm);
+            if (session->eof_received()) {
+                co_return 0;  // close_notify: graceful EOF
+            }
             if (!ec) {
                 if (written != 0) {
                     co_return written;
@@ -330,8 +366,11 @@ inline constexpr struct async_receive_some_t {
             if (received == 0) {
                 co_return 0;
             }
-
             session->decrypt(ciphertext, received, iov->iov_base, iov->iov_len, written, ec);
+            co_await __detail::flush_session_outgoing(strm);
+            if (session->eof_received()) {
+                co_return written > 0 ? written : 0;  // close_notify after data
+            }
             if (!ec) {
                 if (written != 0) {
                     co_return written;
@@ -398,6 +437,7 @@ inline constexpr struct async_receive_t {
                     written,
                     ec);
                 fed_data = false;
+                co_await __detail::flush_session_outgoing(strm);
 
                 if (ec) {
                     if (ec == std::make_error_code(std::errc::resource_unavailable_try_again)) {

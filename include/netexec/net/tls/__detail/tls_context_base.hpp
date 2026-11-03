@@ -37,6 +37,9 @@ class context_base {
     // Set the peer hostname (used for SNI and certificate verification).
     virtual auto set_hostname(std::string_view /*name*/) -> void {}
 
+    // Skip certificate validation (testbeds with self-signed certs).
+    virtual auto set_insecure(bool /*value*/) -> void {}
+
     // Create a client-side TLS session over the next layer.
     virtual auto create_client_session() -> std::unique_ptr<session_base> = 0;
 

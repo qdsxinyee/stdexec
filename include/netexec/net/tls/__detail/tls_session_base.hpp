@@ -31,6 +31,11 @@ class session_base {
     // The view remains valid until consume_outgoing() is called or the session is destroyed.
     virtual auto outgoing_data() -> std::span<const std::byte> = 0;
 
+    // True once the peer sent a TLS close_notify (graceful EOF). Receivers
+    // must stop reading when this is set -- on proxied connections the
+    // socket itself may never see a FIN.
+    virtual auto eof_received() const -> bool { return false; }
+
     // Mark `n` bytes of outgoing_data() as consumed (sent).
     virtual auto consume_outgoing(std::size_t n) -> void = 0;
 

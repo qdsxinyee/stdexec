@@ -15,12 +15,14 @@ struct certificate_t : stdexec::__query<certificate_t> {};
 struct private_key_t : stdexec::__query<private_key_t> {};
 struct ca_bundle_t : stdexec::__query<ca_bundle_t> {};
 struct use_system_trust_store_t : stdexec::__query<use_system_trust_store_t> {};
+struct insecure_t : stdexec::__query<insecure_t> {};
 
 inline constexpr secure_t secure_tag{};
 inline constexpr certificate_t certificate_tag{};
 inline constexpr private_key_t private_key_tag{};
 inline constexpr ca_bundle_t ca_bundle_tag{};
 inline constexpr use_system_trust_store_t use_system_trust_store_tag{};
+inline constexpr insecure_t insecure_tag{};
 } // namespace security_props
 
 struct secure : stdexec::prop<security_props::secure_t, bool> {
@@ -52,6 +54,13 @@ struct ca_bundle : stdexec::prop<security_props::ca_bundle_t, std::string> {
 struct use_system_trust_store : stdexec::prop<security_props::use_system_trust_store_t, bool> {
     explicit use_system_trust_store(bool value = true)
         : prop{security_props::use_system_trust_store_tag, value} {}
+};
+
+// Skip certificate chain and hostname validation entirely (curl -k
+// equivalent). Intended for local testbeds with self-signed certificates.
+struct insecure : stdexec::prop<security_props::insecure_t, bool> {
+    explicit insecure(bool value = true)
+        : prop{security_props::insecure_tag, value} {}
 };
 
 } // namespace netexec::net::tls

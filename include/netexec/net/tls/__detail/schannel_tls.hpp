@@ -579,11 +579,13 @@ class schannel_tls_session : public session_base {
   public:
     // Client-side constructor.
     schannel_tls_session(
-        std::shared_ptr<credential_set> cred, std::string target_name, HCERTSTORE ca_store = nullptr)
+        std::shared_ptr<credential_set> cred, std::string target_name,
+        HCERTSTORE ca_store = nullptr, bool insecure = false)
         : cred_(std::move(cred))
         , target_name_(std::move(target_name))
         , ca_store_(ca_store)
         , manual_validation_(ca_store != nullptr)
+        , insecure_(insecure)
         , is_client_(true) {}
 
     // Server-side constructor.
@@ -620,6 +622,8 @@ class schannel_tls_session : public session_base {
         return std::span{reinterpret_cast<const std::byte*>(this->output_buffer_.data()),
                          this->output_buffer_.size()};
     }
+
+    auto eof_received() const -> bool override { return this->eof_received_; }
 
     auto consume_outgoing(std::size_t n) -> void override {
         if (n >= this->output_buffer_.size()) {
@@ -797,95 +801,268 @@ class schannel_tls_session : public session_base {
         std::error_code& ec) -> void override {
         output_written = 0;
 
-        if (!this->handshake_complete_) {
-            ec = make_error_code(tls_errc::handshake_failed);
-            return;
-        }
+        const auto try_again_ec =
+            std::make_error_code(std::errc::resource_unavailable_try_again);
 
-        // Append new ciphertext to the decryption buffer.
-        if (input_size != 0) {
-            const auto old_size = this->decrypt_buffer_.size();
-            this->decrypt_buffer_.resize(old_size + input_size);
-            std::memcpy(this->decrypt_buffer_.data() + old_size, input, input_size);
-        }
-
-        if (this->decrypt_buffer_.size() < this->header_size_) {
-            ec = std::make_error_code(std::errc::resource_unavailable_try_again);
-            return;
-        }
-
-        SecBuffer buffers[4]{};
-        buffers[0].BufferType = SECBUFFER_DATA;
-        buffers[0].pvBuffer   = this->decrypt_buffer_.data();
-        buffers[0].cbBuffer   = static_cast<unsigned long>(this->decrypt_buffer_.size());
-
-        buffers[1].BufferType = SECBUFFER_EMPTY;
-        buffers[2].BufferType = SECBUFFER_EMPTY;
-        buffers[3].BufferType = SECBUFFER_EMPTY;
-
-        SecBufferDesc desc{};
-        desc.ulVersion = SECBUFFER_VERSION;
-        desc.cBuffers  = 4;
-        desc.pBuffers  = buffers;
-
-        const auto status = ::DecryptMessage(&this->context_, &desc, 0, nullptr);
-        if (status == SEC_E_INCOMPLETE_MESSAGE) {
-            ec = std::make_error_code(std::errc::resource_unavailable_try_again);
-            return;
-        }
-        if (status == SEC_I_CONTEXT_EXPIRED || status == SEC_E_CONTEXT_EXPIRED) {
-            // Peer sent a TLS close_notify; treat this as a graceful EOF.
+        // Plaintext salvaged from a renegotiation call is handed out first.
+        if (!this->pending_plaintext_.empty()) {
+            const std::size_t n =
+                (std::min)(this->pending_plaintext_.size(), output_size);
+            std::memcpy(output, this->pending_plaintext_.data(), n);
+            this->pending_plaintext_.erase(
+                this->pending_plaintext_.begin(),
+                this->pending_plaintext_.begin() +
+                    static_cast<std::ptrdiff_t>(n));
+            output_written = n;
             ec.clear();
             return;
         }
-        if (status != SEC_E_OK) {
-            ec = schannel::make_error_code(status);
-            return;
-        }
 
-        // Find the decrypted data buffer.
-        unsigned char* plaintext = nullptr;
-        std::size_t    plaintext_size = 0;
-        for (const auto& buf : buffers) {
-            if (buf.BufferType == SECBUFFER_DATA) {
-                plaintext      = static_cast<unsigned char*>(buf.pvBuffer);
-                plaintext_size = buf.cbBuffer;
-                break;
+        if (this->renegotiating_) {
+            // A renegotiation is in flight: wire data is handshake input for
+            // InitializeSecurityContext until it completes again.
+            if (input_size != 0) {
+                const auto old_size = this->input_buffer_.size();
+                this->input_buffer_.resize(old_size + input_size);
+                std::memcpy(this->input_buffer_.data() + old_size, input,
+                            input_size);
+            }
+            const bool done = this->pump_renegotiation(ec);
+            if (ec) {
+                return;
+            }
+            if (!done) {
+                // Handshake needs more wire data. Any token it produced sits
+                // in the session output; the caller's receive loop flushes it
+                // after this call returns.
+                ec = try_again_ec;
+                return;
+            }
+            // Completed: client_handshake_step moved any unconsumed
+            // remainder into decrypt_buffer_; continue below with it.
+        } else {
+            if (!this->handshake_complete_) {
+                ec = make_error_code(tls_errc::handshake_failed);
+                return;
+            }
+
+            // Append new ciphertext to the decryption buffer.
+            if (input_size != 0) {
+                const auto old_size = this->decrypt_buffer_.size();
+                this->decrypt_buffer_.resize(old_size + input_size);
+                std::memcpy(this->decrypt_buffer_.data() + old_size, input,
+                            input_size);
             }
         }
 
-        if (plaintext_size > output_size) {
-            ec = make_error_code(tls_errc::no_buffer_space);
+        for (;;) {
+            if (this->decrypt_buffer_.size() < this->header_size_) {
+                ec = try_again_ec;
+                return;
+            }
+
+            SecBuffer buffers[4]{};
+            buffers[0].BufferType = SECBUFFER_DATA;
+            buffers[0].pvBuffer   = this->decrypt_buffer_.data();
+            buffers[0].cbBuffer   =
+                static_cast<unsigned long>(this->decrypt_buffer_.size());
+
+            buffers[1].BufferType = SECBUFFER_EMPTY;
+            buffers[2].BufferType = SECBUFFER_EMPTY;
+            buffers[3].BufferType = SECBUFFER_EMPTY;
+
+            SecBufferDesc desc{};
+            desc.ulVersion = SECBUFFER_VERSION;
+            desc.cBuffers  = 4;
+            desc.pBuffers  = buffers;
+
+            const auto status =
+                ::DecryptMessage(&this->context_, &desc, 0, nullptr);
+
+            if (status == SEC_E_INCOMPLETE_MESSAGE) {
+                ec = try_again_ec;
+                return;
+            }
+            if (status == SEC_I_CONTEXT_EXPIRED ||
+                status == SEC_E_CONTEXT_EXPIRED) {
+                // Peer sent a TLS close_notify: graceful EOF. Report it
+                // through eof_received() and hand back no data -- on proxied
+                // sockets the TCP FIN never arrives, so callers cannot wait
+                // for one.
+                this->decrypt_buffer_.clear();
+                this->eof_received_ = true;
+                ec.clear();
+                return;
+            }
+            if (status == SEC_I_RENEGOTIATE) {
+                // Post-handshake records (TLS session tickets, TLS 1.2
+                // HelloRequest) surface as renegotiation. Preserve:
+                //  1. Plaintext decrypted in this same call (application
+                //     data that preceded the renegotiation record).
+                //  2. The unconsumed EXTRA tail: the renegotiation handshake
+                //     input, fed to InitializeSecurityContext. The token
+                //     DecryptMessage returned must NOT be echoed.
+                for (const auto& buf : buffers) {
+                    if (buf.BufferType == SECBUFFER_DATA && buf.cbBuffer > 0) {
+                        const auto* p =
+                            static_cast<const unsigned char*>(buf.pvBuffer);
+                        this->pending_plaintext_.insert(
+                            this->pending_plaintext_.end(), p,
+                            p + buf.cbBuffer);
+                    }
+                }
+                std::size_t consumed = this->decrypt_buffer_.size();
+                for (const auto& buf : buffers) {
+                    if (buf.BufferType == SECBUFFER_EXTRA &&
+                        buf.cbBuffer > 0) {
+                        consumed =
+                            this->decrypt_buffer_.size() - buf.cbBuffer;
+                        break;
+                    }
+                }
+                if (consumed > 0) {
+                    this->decrypt_buffer_.erase(
+                        this->decrypt_buffer_.begin(),
+                        this->decrypt_buffer_.begin() +
+                            static_cast<std::ptrdiff_t>(consumed));
+                }
+                if (!this->decrypt_buffer_.empty()) {
+                    this->input_buffer_.insert(
+                        this->input_buffer_.end(),
+                        this->decrypt_buffer_.begin(),
+                        this->decrypt_buffer_.end());
+                    this->decrypt_buffer_.clear();
+                }
+                this->renegotiating_ = true;
+                // Pump immediately with only the buffered renegotiation
+                // input: a self-contained post-handshake message (TLS
+                // NewSessionTicket) completes before later wire data can be
+                // mis-consumed as handshake input.
+                const bool reneg_done = this->pump_renegotiation(ec);
+                if (!this->pending_plaintext_.empty()) {
+                    const std::size_t n = (std::min)(
+                        this->pending_plaintext_.size(), output_size);
+                    std::memcpy(output, this->pending_plaintext_.data(), n);
+                    this->pending_plaintext_.erase(
+                        this->pending_plaintext_.begin(),
+                        this->pending_plaintext_.begin() +
+                            static_cast<std::ptrdiff_t>(n));
+                    output_written = n;
+                    ec.clear();
+                    return;
+                }
+                if (ec) {
+                    return;
+                }
+                if (reneg_done) {
+                    continue;  // process any leftover/new ciphertext now
+                }
+                ec = try_again_ec;
+                return;
+            }
+            if (status != SEC_E_OK) {
+                ec = schannel::make_error_code(status);
+                return;
+            }
+
+            // Find the decrypted data buffer.
+            unsigned char* plaintext      = nullptr;
+            std::size_t    plaintext_size = 0;
+            for (const auto& buf : buffers) {
+                if (buf.BufferType == SECBUFFER_DATA) {
+                    plaintext      = static_cast<unsigned char*>(buf.pvBuffer);
+                    plaintext_size = buf.cbBuffer;
+                    break;
+                }
+            }
+
+            if (plaintext_size > output_size) {
+                ec = make_error_code(tls_errc::no_buffer_space);
+                return;
+            }
+
+            if (plaintext_size > 0) {
+                std::memcpy(output, plaintext, plaintext_size);
+                output_written = plaintext_size;
+            }
+
+            // Remove everything schannel consumed: after the call,
+            // buffers[0..2] are STREAM_HEADER / DATA / STREAM_TRAILER (the
+            // header buffer holds only the header size, NOT the record
+            // length), so the consumed prefix is everything except the
+            // SECBUFFER_EXTRA tail.
+            std::size_t consumedAll = this->decrypt_buffer_.size();
+            for (const auto& buf : buffers) {
+                if (buf.BufferType == SECBUFFER_EXTRA && buf.cbBuffer > 0) {
+                    consumedAll = this->decrypt_buffer_.size() - buf.cbBuffer;
+                    break;
+                }
+            }
+            if (consumedAll >= this->decrypt_buffer_.size()) {
+                this->decrypt_buffer_.clear();
+            } else {
+                this->decrypt_buffer_.erase(
+                    this->decrypt_buffer_.begin(),
+                    this->decrypt_buffer_.begin() +
+                        static_cast<std::ptrdiff_t>(consumedAll));
+            }
+
+            ec.clear();
             return;
         }
-
-        if (plaintext_size > 0) {
-            std::memcpy(output, plaintext, plaintext_size);
-            output_written = plaintext_size;
+    }
+  private:
+    // Drive the renegotiation handshake with whatever input is buffered.
+    // Returns true when the renegotiation completed (or errored); false when
+    // more wire data is needed. Any token produced lands in output_buffer_
+    // for the caller's receive loop to flush.
+    auto pump_renegotiation(std::error_code& ec) -> bool {
+        // A post-handshake exchange may complete without a server round
+        // trip: when InitializeSecurityContext consumed all buffered input
+        // AND produced output, call it once more with empty input so the
+        // state machine can finalize (e.g. a TLS session ticket). Only stop
+        // to wait for wire data when there is nothing left to send.
+        int empty_retries = 0;
+        while (true) {
+            std::error_code hec;
+            const auto out_before = this->output_buffer_.size();
+            const bool complete   = this->client_handshake_step(hec);
+            if (hec) {
+                ec = hec;
+                return true;
+            }
+            if (complete) {
+                this->renegotiating_ = false;
+                return true;
+            }
+            if (this->input_buffer_.empty()) {
+                const bool produced = this->output_buffer_.size() > out_before;
+                if (produced && empty_retries < 4) {
+                    ++empty_retries;  // finalize locally, no round trip
+                    continue;
+                }
+                ec.clear();
+                return false;
+            }
+            empty_retries = 0;
         }
-
-        // Remove the consumed record from decrypt_buffer_.  Buffer 0 holds the
-        // whole encrypted record that was processed.
-        const std::size_t consumed = buffers[0].cbBuffer;
-        if (consumed >= this->decrypt_buffer_.size()) {
-            this->decrypt_buffer_.clear();
-        } else {
-            this->decrypt_buffer_.erase(this->decrypt_buffer_.begin(),
-                                        this->decrypt_buffer_.begin() + static_cast<std::ptrdiff_t>(consumed));
-        }
-
-        ec.clear();
     }
 
-  private:
     auto client_handshake_step(std::error_code& ec) -> bool {
-        SecBuffer outbuffer{};
-        outbuffer.BufferType = SECBUFFER_TOKEN;
+        // Output contract mirrors curl's schannel backend: TOKEN + ALERT +
+        // EMPTY, and phNewContext is NULL on continuation calls (the handle
+        // is stable). Passing the handle again as phNewContext, or omitting
+        // the ALERT slot, makes schannel mis-drive post-handshake exchanges
+        // (session tickets surface as a renegotiation that never completes).
+        SecBuffer outbuffers[3]{};
+        outbuffers[0].BufferType = SECBUFFER_TOKEN;
+        outbuffers[1].BufferType = SECBUFFER_ALERT;
+        outbuffers[2].BufferType = SECBUFFER_EMPTY;
 
         SecBufferDesc outdesc{};
         outdesc.ulVersion = SECBUFFER_VERSION;
-        outdesc.cBuffers  = 1;
-        outdesc.pBuffers  = &outbuffer;
+        outdesc.cBuffers  = 3;
+        outdesc.pBuffers  = outbuffers;
 
         SecBuffer inbuffers[2]{};
         inbuffers[0].BufferType = SECBUFFER_TOKEN;
@@ -906,22 +1083,45 @@ class schannel_tls_session : public session_base {
             this->context_initialized_ ? &this->context_ : nullptr,
             const_cast<SEC_CHAR*>(target),
             ISC_REQ_SEQUENCE_DETECT | ISC_REQ_REPLAY_DETECT | ISC_REQ_CONFIDENTIALITY
-                | ISC_RET_EXTENDED_ERROR | ISC_REQ_ALLOCATE_MEMORY | ISC_REQ_STREAM,
+                | ISC_REQ_EXTENDED_ERROR | ISC_REQ_ALLOCATE_MEMORY | ISC_REQ_STREAM,
             0,
             SECURITY_NATIVE_DREP,
             this->context_initialized_ ? &indesc : nullptr,
             0,
-            &this->context_,
+            this->context_initialized_ ? nullptr : &this->context_,
             &outdesc,
             &context_attr,
             nullptr);
 
         this->consume_handshake_input(inbuffers[1], status);
-        this->copy_handshake_output(outbuffer);
+        for (const auto& out : outbuffers) {
+            if (out.BufferType == SECBUFFER_TOKEN) {
+                this->copy_handshake_output(out);
+            }
+        }
 
         if (status == SEC_E_OK) {
             this->context_initialized_ = true;
-            if (this->manual_validation_) {
+            // SEC_E_OK without a reported SECBUFFER_EXTRA means schannel
+            // consumed the entire input; keep the buffer in sync or stale
+            // bytes poison every later call.
+            if (inbuffers[1].BufferType != SECBUFFER_EXTRA) {
+                this->input_buffer_.clear();
+            }
+            // Handshake consumed only part of the input: the SECBUFFER_EXTRA
+            // remainder is application data (e.g. an HTTP request that was
+            // batched into the same segment as the handshake tail). Move it
+            // to the decrypt buffer, or it strands in input_buffer_ and the
+            // peer's data never reaches decrypt().
+            if (!this->input_buffer_.empty()) {
+                const auto old_size = this->decrypt_buffer_.size();
+                this->decrypt_buffer_.resize(old_size + this->input_buffer_.size());
+                std::memcpy(this->decrypt_buffer_.data() + old_size,
+                            this->input_buffer_.data(),
+                            this->input_buffer_.size());
+                this->input_buffer_.clear();
+            }
+            if (this->manual_validation_ && !this->insecure_) {
                 if (!this->validate_remote_certificate(ec)) {
                     return false;
                 }
@@ -1158,6 +1358,7 @@ class schannel_tls_session : public session_base {
     std::string  target_name_;
     HCERTSTORE   ca_store_{nullptr};
     bool         manual_validation_{false};
+    bool         insecure_{false};
     bool         is_client_{false};
 
     std::vector<unsigned char> alpn_buffer_;
@@ -1165,6 +1366,13 @@ class schannel_tls_session : public session_base {
     CtxtHandle  context_{};
     bool        context_initialized_{false};
     bool        handshake_complete_{false};
+    bool eof_received_ = false;
+    // Renegotiation state: after DecryptMessage returns SEC_I_RENEGOTIATE
+    // the post-handshake exchange is driven through client_handshake_step()
+    // again (wire input goes to input_buffer_, not decrypt_buffer_), and any
+    // plaintext decrypted in the same call waits in pending_plaintext_.
+    bool renegotiating_ = false;
+    std::vector<unsigned char> pending_plaintext_;
 
     std::size_t header_size_{0};
     std::size_t trailer_size_{0};
@@ -1325,6 +1533,8 @@ class schannel_tls_context : public context_base {
         return {};
     }
 
+    auto set_insecure(bool value) -> void override { this->insecure_ = value; }
+
     auto create_client_session() -> std::unique_ptr<session_base> override {
         auto ec = this->ensure_client_credentials();
         if (ec) {
@@ -1334,7 +1544,8 @@ class schannel_tls_context : public context_base {
         // for certificate validation during the handshake, and all callers
         // keep this context alive until the handshake completes.
         return std::make_unique<schannel_tls_session>(
-            this->client_creds_, this->target_name_, this->ca_store_);
+            this->client_creds_, this->target_name_, this->ca_store_,
+            this->insecure_);
     }
 
     auto create_server_session() -> std::unique_ptr<session_base> override {
@@ -1377,15 +1588,24 @@ class schannel_tls_context : public context_base {
             return {};
         }
 
-        SCHANNEL_CRED cred{};
-        cred.dwVersion = SCHANNEL_CRED_VERSION;
-        // Use system default protocols (TLS 1.2+).
-        cred.grbitEnabledProtocols = 0;
-
-        // When a custom CA bundle is provided, disable Schannel's automatic
-        // validation and perform explicit chain verification after the handshake.
-        if (this->ca_store_ != nullptr) {
-            cred.dwFlags |= SCH_CRED_MANUAL_CRED_VALIDATION;
+        // Modern credential API (SCH_CREDENTIALS), matching curl's schannel
+        // backend: with the legacy SCHANNEL_CRED structure, schannel
+        // surfaces TLS session-ticket records as SEC_I_RENEGOTIATE
+        // renegotiations that never complete; SCH_CREDENTIALS processes
+        // them locally.
+        SCH_CREDENTIALS credentials{};
+        credentials.dwVersion = SCH_CREDENTIALS_VERSION;
+        credentials.dwFlags   = SCH_CRED_NO_DEFAULT_CREDS |
+                              SCH_CRED_IGNORE_NO_REVOCATION_CHECK |
+                              SCH_CRED_IGNORE_REVOCATION_OFFLINE;
+        if (this->ca_store_ != nullptr || this->insecure_) {
+            // Custom CA bundle: schannel's automatic validation is disabled
+            // and the session performs explicit chain verification after the
+            // handshake (skipped entirely in insecure mode).
+            credentials.dwFlags |= SCH_CRED_MANUAL_CRED_VALIDATION;
+        }
+        if (this->insecure_) {
+            credentials.dwFlags |= SCH_CRED_NO_SERVERNAME_CHECK;
         }
 
         auto creds = std::make_shared<credential_set>();
@@ -1394,17 +1614,14 @@ class schannel_tls_context : public context_base {
             const_cast<SEC_CHAR*>(UNISP_NAME_A),
             SECPKG_CRED_OUTBOUND,
             nullptr,
-            &cred,
+            &credentials,
             nullptr,
             nullptr,
             &creds->handle,
             nullptr);
-
         if (status != SEC_E_OK) {
             return schannel::make_error_code(status);
         }
-
-        creds->valid       = true;
         this->client_creds_ = std::move(creds);
         return {};
     }
@@ -1471,6 +1688,7 @@ class schannel_tls_context : public context_base {
     std::wstring    key_container_;
     HCERTSTORE      ca_store_{nullptr};
     std::string     target_name_;
+    bool            insecure_{false};
 };
 
 } // namespace netexec::net::tls::__detail

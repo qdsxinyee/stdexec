@@ -25,6 +25,7 @@ class preconnection {
         private_key_file_        = query_or(e, security_props::private_key_tag, std::string{});
         ca_bundle_file_          = query_or(e, security_props::ca_bundle_tag, std::string{});
         use_system_trust_store_  = query_or(e, security_props::use_system_trust_store_tag, true);
+        insecure_                = query_or(e, security_props::insecure_tag, false);
         reliability_             = query_or(e, netexec::net::transport_props::reliability_tag, 0);
     }
 
@@ -38,6 +39,7 @@ class preconnection {
     auto private_key_file() const -> const std::string& { return private_key_file_; }
     auto ca_bundle_file() const -> const std::string& { return ca_bundle_file_; }
     auto use_system_trust_store() const -> bool { return use_system_trust_store_; }
+    auto insecure() const -> bool { return insecure_; }
 
     // Create a TLS context appropriate for this preconnection's security
     // configuration. The concrete backend is selected at compile time.
@@ -51,6 +53,7 @@ class preconnection {
     auto make_context() const -> std::unique_ptr<netexec::net::tls::__detail::context_base> {
         auto ctx = std::make_unique<netexec::net::tls::__detail::context>();
         ctx->set_hostname(this->hostname_);
+        ctx->set_insecure(this->insecure_);
 
         if (!this->certificate_file_.empty()) {
             if (auto ec = ctx->use_certificate_file(this->certificate_file_)) {
@@ -96,6 +99,7 @@ class preconnection {
     std::string private_key_file_;
     std::string ca_bundle_file_;
     bool use_system_trust_store_ = true;
+    bool insecure_ = false;
     int reliability_ = 0;
 };
 
