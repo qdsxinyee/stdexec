@@ -151,16 +151,20 @@ async_resolve(io_context& ctx, const std::string& hostname, std::uint16_t port) 
 - `io_context` 析构时，线程池自动 `request_stop()` 并 join 所有线程（RAII）。
 - `getaddrinfo` 一旦开始执行就无法被取消：stop token 只能在任务开始前或任务结束后观察。这是线程池 offload 阻塞系统调用的固有限制；如果需要真正可取消的 DNS，未来要换用 `getaddrinfo_a`、c-ares 或自定义异步 resolver。
 
+#### 跨线程唤醒（Linux poll 后端）
+
+后台线程完成任务后通过 `context_base::schedule` 把 task 回投给 IO 线程。poll 后端注册了一个常驻 eventfd：投递方持锁入队后写 eventfd，poll 线程被唤醒后 drain 并处理任务队列。此前 poll 线程可能因没有可读事件长眠，导致 DNS 解析结果迟迟不被处理（原 `-dk:TODO wake-up polling thread`）。Windows IOCP 后端原生支持跨线程完成排队，无需此机制。
+
 ## 4. TLS 支持
 
 ### 4.1 后端选择
 
-netexec 通过 `NETEXEC_TLS_BACKEND` CMake 选项选择 TLS 后端。Windows 默认使用 **Schannel**（系统原生，无需额外依赖），其他后端（OpenSSL、mbedTLS、SecureTransport）目前为占位实现。
+netexec 通过 `NETEXEC_TLS_BACKEND` CMake 选项选择 TLS 后端。Windows 默认使用 **Schannel**（系统原生，无需额外依赖），Linux 默认使用 **OpenSSL**；mbedTLS、SecureTransport 目前为占位实现。
 
 | 平台 | 默认后端 | 状态 |
 |---|---|---|
 | Windows | Schannel | 完整实现 |
-| Linux | OpenSSL | 占位（stub） |
+| Linux | OpenSSL | 完整实现（要求 OpenSSL ≥ 3.0） |
 | macOS | SecureTransport | 占位（stub） |
 
 ### 4.2 Schannel 后端架构
@@ -215,7 +219,17 @@ TLS 1.3 的握手可能包含额外的 post-handshake 步骤（例如服务器�
 
 自签名证书生成（2048-bit RSA 密钥对）和 `AcquireCredentialsHandle` 在首次调用时可能花费几百毫秒。`https-server.cpp` 在启动监听前主动调用 `create_server_session()` 对每个 TLS context 进行预热，把证书和 credentials 的创建开销从“第一个客户端连接时”转移到“服务器启动时”，从而避免浏览器/工具第一次访问时的明显卡顿。
 
-### 4.4 开发证书与浏览器信任
+### 4.4 OpenSSL 后端架构
+
+`include/netexec/net/tls/__detail/openssl_tls.hpp` 实现 Linux/POSIX 默认的 OpenSSL 后端（要求 OpenSSL ≥ 3.0，最低 TLS 1.2）：
+
+- `openssl_tls_context`：持有 `SSL_CTX`（`TLS_method()`），加载 PEM 证书链/私钥/CA bundle，默认使用系统 verify paths
+- `openssl_tls_session`：持有 `SSL*`，通过一对内存 BIO（`BIO_s_mem`）与传输解耦——socket 收到的密文写入 rbio，OpenSSL 产出的密文从 wbio 排入 outgoing buffer，驱动形态与 Schannel 后端一致（`handshake_step` / `outgoing_data` / `feed_incoming`）
+- 生命周期：`SSL_new` 会递增 `SSL_CTX` 引用计数，`SSL_free` 时递减，session 可安全存活于 context 析构之后（OpenSSL 原生保证，无需 Schannel 那样的 `credential_set`）
+- 未提供证书时服务端生成内存自签名证书（RSA 2048 / SHA-256，SAN 含 hostname、localhost、127.0.0.1、::1），与 Schannel 行为对齐
+- 证书校验失败映射到 `tls_errc`（过期 / 名称不匹配 / 不受信任根 / 已吊销等）
+
+### 4.5 开发证书与浏览器信任
 
 `https-server-trusted.cpp` 演示了如何加载用户提供的 PEM 证书，而不是依赖 Schannel 动态生成的自签名证书。要消除浏览器的"不安全"警告，需要把生成证书时产生的根 CA（`certs/ca.crt`）导入到**运行浏览器的那台设备**的信任存储中。
 
@@ -280,7 +294,7 @@ stdexec/include/netexec/
       context_base.hpp           # netexec::net::tls::__detail::context_base
       session_base.hpp           # netexec::net::tls::__detail::session_base
       schannel_tls.hpp           # Windows Schannel TLS 实现
-      openssl_tls.hpp            # OpenSSL 占位
+      openssl_tls.hpp            # Linux OpenSSL 实现
       ...
   __detail/                      # 底层实现
     io_context.hpp
@@ -291,7 +305,7 @@ stdexec/include/netexec/
 
 ## 6. 当前限制
 
-1. **TLS 后端不完整**：Windows Schannel 已可用；OpenSSL / SecureTransport / mbedTLS 仍为占位实现。
+1. **TLS 后端不完整**：Windows Schannel 与 Linux OpenSSL 已实现；SecureTransport / mbedTLS 仍为占位实现。
 2. **Message 边界未实现**：`net::tls::async_receive` 简化为读到 EOF
 3. **UDP 未实现**：仅有 TCP 支持
 4. **rendezvous 占位**：抛 `not implemented`

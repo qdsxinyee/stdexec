@@ -12,6 +12,8 @@ cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DSTDEXEC_BUILD_TESTS=OFF
 cmake --build build -j$(nproc)
 ```
 
+TLS 后端默认值：Windows 为 Schannel（零第三方依赖），Linux 为 OpenSSL（要求 ≥ 3.0，链接 libssl/libcrypto）。
+
 ### 1.1 更新 clangd 的 compile_commands.json
 
 > 主构建目录是 `build/`（Visual Studio 生成器），用于实际编译和运行；`build-ninja/` 仅用于给 clangd 提供 `compile_commands.json`。Visual Studio 生成器不会生成 `compile_commands.json`，所以单独维护一个 Ninja 构建目录。
@@ -222,7 +224,7 @@ ex::sync_wait(scope.join());
 
 4. 浏览器访问 `https://localhost:8443/`，不再提示自签名证书不安全。
 
-`https-server-trusted.cpp` 通过 `net::tls::certificate(...)` 和 `net::tls::private_key(...)` 向 `net::tls::preconnection` 提供 PEM 文件路径；Schannel 后端在启动时加载这些文件并用于 TLS 握手。如果证书文件缺失或格式错误，`preconnection::make_context()` 会抛出 `std::system_error`，错误信息指明加载失败的文件路径和底层原因，服务器启动随之失败，而不是回退到自签名证书。同理，客户端显式指定的 `net::tls::ca_bundle(...)` 加载失败也会立即抛错；只有默认信任存储（隐式增强）加载失败时才会被容忍。
+`https-server-trusted.cpp` 通过 `net::tls::certificate(...)` 和 `net::tls::private_key(...)` 向 `net::tls::preconnection` 提供 PEM 文件路径；TLS 后端（Windows 为 Schannel，Linux 为 OpenSSL）在启动时加载这些文件并用于 TLS 握手。如果证书文件缺失或格式错误，`preconnection::make_context()` 会抛出 `std::system_error`，错误信息指明加载失败的文件路径和底层原因，服务器启动随之失败，而不是回退到自签名证书。同理，客户端显式指定的 `net::tls::ca_bundle(...)` 加载失败也会立即抛错；只有默认信任存储（隐式增强）加载失败时才会被容忍。
 
 ## 4. 公网部署建议
 
