@@ -38,6 +38,25 @@ TEST_CASE("netexec - resume_at fires", "[netexec][timer]") {
     CHECK(fired);
 }
 
+TEST_CASE("netexec - zero duration and past timers complete once", "[netexec][timer]") {
+    netexec::scope scope;
+    int        completions = 0;
+
+    ex::spawn(
+        net::resume_after(scope.get_scheduler(), 0ms)
+            | ex::then([&]() noexcept { ++completions; })
+            | ex::upon_error([](auto&&) noexcept {}),
+        scope.get_token());
+    ex::spawn(
+        net::resume_at(scope.get_scheduler(), std::chrono::system_clock::now() - 1ms)
+            | ex::then([&]() noexcept { ++completions; })
+            | ex::upon_error([](auto&&) noexcept {}),
+        scope.get_token());
+
+    ex::sync_wait(scope.run());
+    CHECK(completions == 2);
+}
+
 TEST_CASE("netexec - when_any timeout beats slow timer", "[netexec][timer]") {
     netexec::scope scope;
     bool       fast_fired = false;

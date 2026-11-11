@@ -9,20 +9,33 @@
 
 #include <cassert>
 #include <cstdint>
+#include <mutex>
 #include <system_error>
 #include <tuple>
 #include <liburing.h>
+#include <sys/eventfd.h>
 
 namespace netexec::detail {
 
 // io_context implementation based on liburing
 struct uring_context final : context_base {
+    struct wakeup_operation final : io_base {
+        ::std::uint64_t value{};
+        wakeup_operation() : io_base(::netexec::detail::socket_id::invalid, ::netexec::event_type::none) {}
+        auto complete() -> void override {}
+        auto error(::std::error_code) -> void override {}
+        auto cancel() -> void override {}
+    };
+
     static constexpr unsigned     QUEUE_DEPTH = 128;
     ::io_uring                    ring;
     container<native_handle_type> sockets;
-    task*                         tasks       = nullptr;
+    task*                         tasks = nullptr;
+    ::std::mutex                  tasks_mutex;
     ::std::size_t                 submitting  = 0; // sqes not yet submitted
-    ::std::size_t                 outstanding = 0; // cqes expected
+    ::std::size_t                 outstanding = 0; // user cqes expected
+    int                           wakeup_fd{-1};
+    wakeup_operation              wakeup;
 
     uring_context() {
         int flags = 0;
@@ -30,8 +43,27 @@ struct uring_context final : context_base {
         if (r < 0) {
             throw ::std::system_error(-r, ::std::system_category(), "io_uring_queue_init failed");
         }
+        this->wakeup_fd = ::eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
+        if (this->wakeup_fd < 0) {
+            int error = errno;
+            ::io_uring_queue_exit(&ring);
+            throw ::std::system_error(error, ::std::system_category(), "eventfd failed");
+        }
+        this->wakeup.work = [](context_base& ctx, io_base* io) {
+            auto& self = static_cast<uring_context&>(ctx);
+            int   res  = *static_cast<int*>(io->extra.get());
+            if (res < 0 && res != -EINTR) {
+                throw ::std::system_error(-res, ::std::system_category(), "eventfd read failed");
+            }
+            self.arm_wakeup();
+            return submit_result::submit;
+        };
+        this->arm_wakeup();
     }
-    ~uring_context() override { ::io_uring_queue_exit(&ring); }
+    ~uring_context() override {
+        ::io_uring_queue_exit(&ring);
+        ::close(this->wakeup_fd);
+    }
 
     auto make_socket(native_handle_type handle) -> socket_id override { return sockets.insert(handle); }
 
@@ -82,6 +114,11 @@ struct uring_context final : context_base {
         submitting -= r;
     }
 
+    auto arm_wakeup() -> void {
+        auto sqe = this->get_sqe(&this->wakeup);
+        ::io_uring_prep_read(sqe, this->wakeup_fd, &this->wakeup.value, sizeof(this->wakeup.value), 0);
+    }
+
     auto get_sqe(io_base* completion) -> ::io_uring_sqe* {
         auto sqe = ::io_uring_get_sqe(&ring);
         while (sqe == nullptr) {
@@ -91,30 +128,40 @@ struct uring_context final : context_base {
         }
         ::io_uring_sqe_set_data(sqe, completion);
         ++submitting;
-        ++outstanding;
+        if (completion != &this->wakeup) {
+            ++outstanding;
+        }
         return sqe;
     }
 
     auto wait() -> ::std::tuple<int, io_base*> {
         ::io_uring_cqe* cqe = nullptr;
-        int             r   = ::io_uring_wait_cqe(&ring, &cqe);
+        int             r;
+        do {
+            r = ::io_uring_wait_cqe(&ring, &cqe);
+        } while (r == -EINTR);
         if (r < 0) {
             throw ::std::system_error(-r, ::std::system_category(), "io_uring_wait_cqe failed");
         }
 
-        assert(outstanding > 0);
-        --outstanding;
-
         const int  res        = cqe->res;
-        const auto completion = ::io_uring_cqe_get_data(cqe);
+        const auto completion = static_cast<io_base*>(::io_uring_cqe_get_data(cqe));
         ::io_uring_cqe_seen(&ring, cqe);
+        if (completion != &this->wakeup) {
+            assert(outstanding > 0);
+            --outstanding;
+        }
 
-        return {res, static_cast<io_base*>(completion)};
+        return {res, completion};
     }
 
-    auto run_one() noexcept -> ::std::size_t override {
+    auto run_one() -> ::std::size_t override {
         if (auto count = process_task(); count) {
             return count;
+        }
+
+        if (!outstanding && this->work_count.load() == 0u) {
+            return 0;
         }
 
         if (submitting) {
@@ -122,31 +169,29 @@ struct uring_context final : context_base {
             // single system call. this allows io_uring_wait_cqe() below to be
             // served directly from memory
             unsigned wait_nr = 1;
-            int      r       = ::io_uring_submit_and_wait(&ring, wait_nr);
+            int      r;
+            do {
+                r = ::io_uring_submit_and_wait(&ring, wait_nr);
+            } while (r == -EINTR);
             if (r < 0) {
                 throw ::std::system_error(-r, ::std::system_category(), "io_uring_submit_and_wait failed");
             }
-            assert(submitting >= r);
+            assert(submitting >= static_cast<::std::size_t>(r));
             submitting -= r;
         }
 
-        if (!outstanding && this->work_count.load() == 0u) {
-            // nothing to submit and nothing to wait on, we're done
-            return 0;
-        }
-
-        // read the next completion, waiting if necessary
         auto [res, completion] = wait();
-
-        // work() functions depend on res, so pass it in via 'extra'
         completion->extra.reset(&res);
         completion->work(*this, completion);
 
         return 1;
     }
 
-    auto cancel(io_base* cancel_op, io_base* op) -> void override {
-        cancel_op->work = [](context_base& ctx, io_base* io) {
+    auto cancel_on_loop(io_base* cancel_op, io_base* op) -> void override {
+        while (submitting) {
+            submit();
+        }
+        cancel_op->work = [](context_base&, io_base* io) {
             auto res = *static_cast<int*>(io->extra.get());
             if (res == -ENOENT || res == -EALREADY) { // op already completed
                 io->cancel();
@@ -165,23 +210,34 @@ struct uring_context final : context_base {
     }
 
     auto schedule(task* t) -> void override {
-        t->next = tasks;
-        tasks   = t;
+        {
+            ::std::lock_guard lock(this->tasks_mutex);
+            t->next = tasks;
+            tasks   = t;
+        }
+        this->wake();
     }
 
     auto wake() -> void override {
-        // TODO: wake up a thread blocked in io_uring_wait_cqe().
+        const ::std::uint64_t one = 1;
+        (void)::write(this->wakeup_fd, &one, sizeof(one));
     }
 
-    auto poll(poll_operation*) -> submit_result override {
-        //-dk:TODO implement if needed; io_uring does not need a generic poll path.
-        return submit_result{};
+    auto poll(poll_operation* op) -> submit_result override {
+        op->error(::std::make_error_code(::std::errc::operation_not_supported));
+        return submit_result::error;
     }
 
     auto process_task() -> ::std::size_t {
-        if (tasks) {
-            auto* t = tasks;
-            tasks   = t->next;
+        task* t{};
+        {
+            ::std::lock_guard lock(this->tasks_mutex);
+            if (tasks) {
+                t     = tasks;
+                tasks = t->next;
+            }
+        }
+        if (t) {
             t->complete();
             return 1u;
         }
@@ -311,17 +367,12 @@ struct uring_context final : context_base {
             return submit_result::error;
         };
 
-        auto     sqe   = get_sqe(op);
-        auto     ts    = make_timespec(at.time_since_epoch());
+        auto     sqe = get_sqe(op);
+        auto&    ts  = ::std::get<1>(*op);
+        ts           = make_timespec(at.time_since_epoch());
         unsigned count = 0;
         unsigned flags = IORING_TIMEOUT_ABS | IORING_TIMEOUT_REALTIME;
         ::io_uring_prep_timeout(sqe, &ts, count, flags);
-
-        // unlike other operations whose submissions can be batched in run_one(),
-        // the timeout argument to io_uring_prep_timeout() is a pointer to memory
-        // on the stack. this memory must remain valid until submit, so we either
-        // have to call submit here or allocate heap memory to store it
-        submit();
         return submit_result::submit;
     }
 };

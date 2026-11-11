@@ -52,3 +52,52 @@ TEST_CASE("netexec - address_in_use on duplicate bind", "[netexec][errors]") {
 
     CHECK(failed);
 }
+
+TEST_CASE("netexec - connection reset is not graceful EOF", "[netexec][errors]") {
+    netexec::scope scope;
+    auto       port = netexec_test::next_port();
+    auto       ep   = netexec_test::make_server_endpoint(port);
+    net::ip::tcp::acceptor acceptor(scope.get_context(), ep.protocol());
+    acceptor.bind(ep);
+    acceptor.listen();
+    std::error_code receive_error;
+
+    auto reset_peer = [](net::ip::tcp::acceptor server) -> exec::task<void> {
+        auto [client, address] = co_await net::ip::tcp::async_accept(server);
+        auto handle = client.get_scheduler().get_context()->native_handle(client.id());
+        ::linger option{.l_onoff = 1, .l_linger = 0};
+        if (::setsockopt(
+                handle,
+                SOL_SOCKET,
+                SO_LINGER,
+                reinterpret_cast<const char*>(&option),
+                static_cast<::socklen_t>(sizeof(option))) != 0) {
+            throw std::system_error(sock_errno(), std::system_category(), "setsockopt(SO_LINGER) failed");
+        }
+    };
+    auto receive_reset = [](netexec::scope& scope, std::uint16_t port, std::error_code* error) -> exec::task<void> {
+        net::ip::tcp::socket socket(scope.get_context(), netexec_test::make_server_endpoint(port));
+        co_await net::ip::tcp::async_connect(socket);
+        char buffer[16];
+        try {
+            co_await net::ip::tcp::async_receive(socket, net::buffer(buffer));
+        } catch (const std::system_error& ec) {
+            *error = ec.code();
+        }
+    };
+
+    ex::spawn(
+        std::invoke(reset_peer, std::move(acceptor)) | ex::upon_error([](auto&&) noexcept {}),
+        scope.get_token());
+    ex::spawn(
+        std::invoke(receive_reset, scope, port, &receive_error) | ex::upon_error([](auto&&) noexcept {}),
+        scope.get_token());
+
+    ex::sync_wait(scope.run());
+    REQUIRE(receive_error);
+#ifdef _WIN32
+    CHECK((receive_error.value() == WSAECONNRESET || receive_error.value() == ERROR_NETNAME_DELETED));
+#else
+    CHECK(receive_error == std::errc::connection_reset);
+#endif
+}

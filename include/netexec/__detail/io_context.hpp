@@ -25,6 +25,7 @@
 #include <exec/static_thread_pool.hpp>
 #include <cstdint>
 #include <cerrno>
+#include <exception>
 #include <csignal>
 #include <limits>
 #include <mutex>
@@ -147,8 +148,7 @@ class netexec::io_context {
             try {
                 ::stdexec::set_value(::std::move(this->_receiver), this->_context->run_one());
             } catch (...) {
-                //-dk:TODO deal with exceptions in async_run_one
-                std::cout << "run_one_state exception caught\n";
+                ::stdexec::set_error(::std::move(this->_receiver), ::std::current_exception());
             }
         }
     };
@@ -157,6 +157,7 @@ class netexec::io_context {
         using sender_concept = ::stdexec::sender_t;
         using completion_signatures =
             ::stdexec::completion_signatures<::stdexec::set_value_t(std::size_t),
+                                                      ::stdexec::set_error_t(::std::exception_ptr),
                                                       ::stdexec::set_stopped_t()>;
 
         netexec::io_context* _context;

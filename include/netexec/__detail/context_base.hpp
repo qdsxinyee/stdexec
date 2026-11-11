@@ -7,6 +7,9 @@
 #include <netexec/__detail/platform.hpp>
 #include <netexec/__detail/io_base.hpp>
 #include <netexec/__detail/endpoint.hpp>
+#ifdef NET_EXEC_USE_URING
+#  include <liburing.h>
+#endif
 #include <atomic>
 #include <chrono>
 #include <optional>
@@ -33,10 +36,15 @@ struct netexec::detail::context_base {
     using connect_operation = ::netexec::detail::io_operation<::std::tuple<::netexec::detail::endpoint>>;
     using receive_operation = ::netexec::detail::io_operation<::std::tuple<::msghdr, int, ::std::size_t>>;
     using send_operation    = ::netexec::detail::io_operation<::std::tuple<::msghdr, int, ::std::size_t>>;
+#ifdef NET_EXEC_USE_URING
+    using timer_data = ::__kernel_timespec;
+#else
+    using timer_data = ::timeval;
+#endif
     using resume_after_operation =
-        ::netexec::detail::io_operation<::std::tuple<::std::chrono::system_clock::time_point, ::timeval>>;
+        ::netexec::detail::io_operation<::std::tuple<::std::chrono::system_clock::time_point, timer_data>>;
     using resume_at_operation =
-        ::netexec::detail::io_operation<::std::tuple<::std::chrono::system_clock::time_point, ::timeval>>;
+        ::netexec::detail::io_operation<::std::tuple<::std::chrono::system_clock::time_point, timer_data>>;
     using poll_operation = ::netexec::detail::io_operation<::std::tuple<int, ::netexec::event_type>>;
 
     virtual ~context_base()                                                                                 = default;
@@ -71,10 +79,13 @@ struct netexec::detail::context_base {
 
     virtual auto wake() -> void = 0;
 
-    virtual auto run_one() noexcept -> ::std::size_t = 0;
+    virtual auto run_one() -> ::std::size_t = 0;
 
-    virtual auto cancel(::netexec::detail::io_base*, ::netexec::detail::io_base*) -> void = 0;
-    virtual auto schedule(::netexec::detail::context_base::task*) -> void                    = 0;
+    auto cancel(::netexec::detail::io_base*, ::netexec::detail::io_base*, task* cancel_task) -> void {
+        this->schedule(cancel_task);
+    }
+    virtual auto cancel_on_loop(::netexec::detail::io_base*, ::netexec::detail::io_base*) -> void = 0;
+    virtual auto schedule(::netexec::detail::context_base::task*) -> void                            = 0;
     virtual auto poll(::netexec::detail::context_base::poll_operation*)
         -> ::netexec::detail::submit_result = 0;
     virtual auto accept(::netexec::detail::context_base::accept_operation*)

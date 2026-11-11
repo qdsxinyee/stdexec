@@ -86,8 +86,14 @@ class netexec::detail::io_context_scheduler {
 
     auto get_context() const { return this->d_context; }
 
-    auto cancel(netexec::detail::io_base* cancel_op, netexec::detail::io_base* op) -> void {
-        this->d_context->cancel(cancel_op, op);
+    auto cancel(
+        netexec::detail::io_base* cancel_op,
+        netexec::detail::io_base* op,
+        netexec::detail::context_base::task* cancel_task) -> void {
+        this->d_context->cancel(cancel_op, op, cancel_task);
+    }
+    auto cancel_on_loop(netexec::detail::io_base* cancel_op, netexec::detail::io_base* op) -> void {
+        this->d_context->cancel_on_loop(cancel_op, op);
     }
     auto poll(::netexec::detail::context_base::poll_operation* op) -> ::netexec::detail::submit_result {
         return this->d_context->poll(op);

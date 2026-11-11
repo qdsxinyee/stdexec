@@ -26,9 +26,13 @@
 
 namespace netexec::detail {
 
+struct iocp_socket_data;
+
 struct iocp_overlapped : OVERLAPPED {
-    io_base* completion{};
-    int      result{};
+    io_base*          completion{};
+    int               result{};
+    native_handle_type handle{invalid_handle};
+    iocp_socket_data* socket{};
 
     iocp_overlapped() : OVERLAPPED{} {}
 };
@@ -53,6 +57,8 @@ struct iocp_io_data : iocp_overlapped {
 // At most one outstanding operation per direction.
 struct iocp_socket_data {
     ::std::unique_ptr<iocp_socket_data> next_deferred;
+    ::std::size_t                       pending{};
+    bool                                released{};
     iocp_accept_data                    accept_ol;
     iocp_io_data                        recv_ol;
     iocp_io_data                        send_ol;
@@ -73,10 +79,8 @@ struct iocp_context final : context_base {
     task*                  tasks{};
     ::std::mutex           tasks_mutex;
     ::std::size_t          outstanding{0};
-    ::std::size_t          socket_count{0};
 
-    // Released socket data kept alive until IOCP completions drain.
-    // One entry freed per run_one() completion.
+    // Released socket data kept alive until its own IOCP completions drain.
     ::std::unique_ptr<iocp_socket_data> deferred;
 
     // Each outstanding AcceptEx owns a distinct iocp_accept_data.  The
@@ -90,6 +94,36 @@ struct iocp_context final : context_base {
         if (it != kept_accept_data.end()) {
             *it = ::std::move(kept_accept_data.back());
             kept_accept_data.pop_back();
+        }
+    }
+
+    auto record_submission(iocp_overlapped& data) -> void {
+        ++outstanding;
+        if (data.socket) {
+            ++data.socket->pending;
+        }
+    }
+
+    auto reclaim_deferred(iocp_socket_data* socket) -> void {
+        auto* link = &deferred;
+        while (*link && link->get() != socket) {
+            link = &(*link)->next_deferred;
+        }
+        assert(link->get() == socket);
+        if (link->get() == socket) {
+            auto node = ::std::move(*link);
+            *link     = ::std::move(node->next_deferred);
+        }
+    }
+
+    auto complete_submission(iocp_socket_data* socket) -> void {
+        if (!socket) {
+            return;
+        }
+        assert(socket->pending > 0);
+        --socket->pending;
+        if (socket->pending == 0 && socket->released) {
+            reclaim_deferred(socket);
         }
     }
 
@@ -230,7 +264,6 @@ struct iocp_context final : context_base {
         SOCKET s = static_cast<SOCKET>(handle);
         set_nonblocking(s);
         skip_sync_completion(s);
-        ++socket_count;
         return sockets.insert(iocp_record{handle, AF_INET6, ::std::make_unique<iocp_socket_data>()});
     }
 
@@ -243,22 +276,22 @@ struct iocp_context final : context_base {
         associate_with_iocp(s);
         set_nonblocking(s);
         skip_sync_completion(s);
-        ++socket_count;
         return sockets.insert(
             iocp_record{static_cast<native_handle_type>(s), d, ::std::make_unique<iocp_socket_data>()});
     }
 
     auto release(socket_id id, ::std::error_code& error) -> void override {
         native_handle_type handle = sockets[id].handle;
-        if (outstanding > 0) {
-            sockets[id].io->next_deferred = ::std::move(deferred);
-            deferred                      = ::std::move(sockets[id].io);
-        }
+        auto               io     = ::std::move(sockets[id].io);
         sockets.erase(id);
+        if (io->pending > 0) {
+            io->released      = true;
+            io->next_deferred = ::std::move(deferred);
+            deferred          = ::std::move(io);
+        }
         if (::closesocket(static_cast<SOCKET>(handle)) == SOCKET_ERROR) {
             error = ::std::error_code(::WSAGetLastError(), ::std::system_category());
         }
-        --socket_count;
     }
 
     auto native_handle(socket_id id) -> native_handle_type override { return sockets[id].handle; }
@@ -289,7 +322,10 @@ struct iocp_context final : context_base {
             return 1u;
         }
 
-        if (outstanding == 0 && timeouts.empty() && socket_count == 0 && this->work_count.load() == 0u) {
+        // The loop sleeps in GetQueuedCompletionStatus until an operation
+        // completes; an open-but-idle socket never produces one, so only
+        // actual work (completions, timers, scoped work) keeps it alive.
+        if (outstanding == 0 && timeouts.empty() && this->work_count.load() == 0u) {
             return 0u;
         }
 
@@ -319,7 +355,7 @@ struct iocp_context final : context_base {
                     }
                     // A spurious early wake can leave pending timers or work.
                     // Keep the loop alive while there is still work to do.
-                    if (outstanding > 0 || !timeouts.empty() || socket_count > 0 || this->work_count.load() > 0u) {
+                    if (outstanding > 0 || !timeouts.empty() || this->work_count.load() > 0u) {
                         return 1u;
                     }
                     return 0u;
@@ -331,7 +367,7 @@ struct iocp_context final : context_base {
             }
             // Spurious null completion (e.g., a posted completion raced with task
             // consumption). If there is still work pending, keep the loop alive.
-            if (outstanding > 0 || !timeouts.empty() || socket_count > 0 || this->work_count.load() > 0u) {
+            if (outstanding > 0 || !timeouts.empty() || this->work_count.load() > 0u) {
                 return 1u;
             }
             return 0u;
@@ -341,13 +377,10 @@ struct iocp_context final : context_base {
         auto* iocp_ol   = static_cast<iocp_overlapped*>(overlapped_ptr);
         iocp_ol->result = ok ? static_cast<int>(bytes_transferred) : -static_cast<int>(::GetLastError());
 
-        auto* comp = iocp_ol->completion;
+        auto* socket = iocp_ol->socket;
+        auto* comp   = iocp_ol->completion;
         comp->work(*this, comp);
-
-        if (deferred) {
-            auto head = ::std::move(deferred);
-            deferred  = ::std::move(head->next_deferred);
-        }
+        complete_submission(socket);
 
         return 1u;
     }
@@ -355,18 +388,16 @@ struct iocp_context final : context_base {
     // Two-phase cancellation: CancelIoEx asks the kernel to abort;
     // the operation completes through IOCP with ERROR_OPERATION_ABORTED.
     // cancel_op is signaled immediately; op completes later in run_one().
-    auto cancel(io_base* cancel_op, io_base* op) -> void override {
+    auto cancel_on_loop(io_base* cancel_op, io_base* op) -> void override {
         if (timeouts.erase(op)) {
             op->cancel();
             cancel_op->cancel();
             return;
         }
 
-        if (op->id != socket_id::invalid) {
-            auto* data = static_cast<iocp_overlapped*>(op->extra.get());
-            if (data) {
-                ::CancelIoEx(reinterpret_cast<HANDLE>(native_handle(op->id)), static_cast<LPOVERLAPPED>(data));
-            }
+        auto* data = static_cast<iocp_overlapped*>(op->extra.get());
+        if (data && data->handle != invalid_handle) {
+            ::CancelIoEx(reinterpret_cast<HANDLE>(data->handle), static_cast<LPOVERLAPPED>(data));
         }
         cancel_op->cancel();
     }
@@ -383,7 +414,8 @@ struct iocp_context final : context_base {
     auto wake() -> void override { ::PostQueuedCompletionStatus(iocp_handle, 0, 0, nullptr); }
 
     auto poll(poll_operation* op) -> submit_result override {
-        return submit_result{}; //-dk:TODO
+        op->error(::std::make_error_code(::std::errc::operation_not_supported));
+        return submit_result::error;
     }
     auto accept(accept_operation* op) -> submit_result override {
         SOCKET listen_socket = static_cast<SOCKET>(native_handle(op->id));
@@ -391,6 +423,8 @@ struct iocp_context final : context_base {
 
         auto data = ::std::make_unique<iocp_accept_data>();
         data->completion    = op;
+        data->handle        = static_cast<native_handle_type>(listen_socket);
+        data->socket        = sockets[op->id].io.get();
         data->accept_socket = ::WSASocketW(family, SOCK_STREAM, IPPROTO_TCP, nullptr, 0, WSA_FLAG_OVERLAPPED);
 
         if (data->accept_socket == INVALID_SOCKET) {
@@ -421,12 +455,10 @@ struct iocp_context final : context_base {
             if (data->result < 0) {
                 int err = -data->result;
                 if (err == static_cast<int>(ERROR_OPERATION_ABORTED)) {
-                    data->accept_socket = INVALID_SOCKET;
                     io->cancel();
                     cleanup();
                     return submit_result::ready;
                 }
-                data->accept_socket = INVALID_SOCKET;
                 io->error(::std::error_code(err, ::std::system_category()));
                 cleanup();
                 return submit_result::error;
@@ -442,7 +474,7 @@ struct iocp_context final : context_base {
             iocp_ctx.get_accept_ex_sockaddrs_fn(
                 data->buffer, 0, addr_len, addr_len, &local_addr, &local_len, &remote_addr, &remote_len);
 
-            SOCKET listen_sock = static_cast<SOCKET>(iocp_ctx.native_handle(io->id));
+            SOCKET listen_sock = static_cast<SOCKET>(data->handle);
             ::setsockopt(data->accept_socket, SOL_SOCKET, SO_UPDATE_ACCEPT_CONTEXT,
                          reinterpret_cast<const char*>(&listen_sock), sizeof(SOCKET));
 
@@ -484,7 +516,7 @@ struct iocp_context final : context_base {
         int err = ::WSAGetLastError();
         if (err == ERROR_IO_PENDING) {
             this->kept_accept_data.push_back(::std::move(data));
-            ++outstanding;
+            record_submission(*raw);
             return submit_result::submit;
         }
 
@@ -512,12 +544,15 @@ struct iocp_context final : context_base {
             }
         }
 
-        auto& data      = sockets[op->id].io->connect_ol;
+        auto* socket    = sockets[op->id].io.get();
+        auto& data      = socket->connect_ol;
         data            = iocp_overlapped{};
         data.completion = op;
+        data.handle     = static_cast<native_handle_type>(handle);
+        data.socket     = socket;
         op->extra       = io_base::extra_t(&data, +[](void*) {});
 
-        op->work = [](context_base& ctx, io_base* io) -> submit_result {
+        op->work = [](context_base&, io_base* io) -> submit_result {
             auto* data = static_cast<iocp_overlapped*>(io->extra.get());
             if (data->result < 0) {
                 int err = -data->result;
@@ -529,7 +564,7 @@ struct iocp_context final : context_base {
                 return submit_result::error;
             }
 
-            auto h = static_cast<SOCKET>(ctx.native_handle(io->id));
+            auto h = static_cast<SOCKET>(data->handle);
             ::setsockopt(h, SOL_SOCKET, SO_UPDATE_CONNECT_CONTEXT, static_cast<const char*>(nullptr), 0);
 
             // The socket was already made non-blocking and configured to skip
@@ -554,7 +589,7 @@ struct iocp_context final : context_base {
             return submit_result::error;
         }
 
-        ++outstanding;
+        record_submission(data);
         return submit_result::submit;
     }
 
@@ -562,9 +597,12 @@ struct iocp_context final : context_base {
         auto  handle = static_cast<SOCKET>(native_handle(op->id));
         auto& msg    = ::std::get<0>(*op);
 
-        auto& data      = sockets[op->id].io->recv_ol;
+        auto* socket    = sockets[op->id].io.get();
+        auto& data      = socket->recv_ol;
         data            = iocp_io_data{};
         data.completion = op;
+        data.handle     = static_cast<native_handle_type>(handle);
+        data.socket     = socket;
         data.flags      = 0;
 
         if (msg.msg_iov && msg.msg_iovlen > 0) {
@@ -582,11 +620,6 @@ struct iocp_context final : context_base {
                 int err = -data->result;
                 if (err == static_cast<int>(ERROR_OPERATION_ABORTED)) {
                     io->cancel();
-                    return submit_result::ready;
-                }
-                if (err == WSAECONNRESET || err == static_cast<int>(ERROR_NETNAME_DELETED)) {
-                    ::std::get<2>(*rop) = 0u;
-                    io->complete();
                     return submit_result::ready;
                 }
                 io->error(::std::error_code(err, ::std::system_category()));
@@ -615,7 +648,7 @@ struct iocp_context final : context_base {
             return submit_result::error;
         }
 
-        ++outstanding;
+        record_submission(data);
         return submit_result::submit;
     }
 
@@ -623,9 +656,12 @@ struct iocp_context final : context_base {
         auto  handle = static_cast<SOCKET>(native_handle(op->id));
         auto& msg    = ::std::get<0>(*op);
 
-        auto& data      = sockets[op->id].io->send_ol;
+        auto* socket    = sockets[op->id].io.get();
+        auto& data      = socket->send_ol;
         data            = iocp_io_data{};
         data.completion = op;
+        data.handle     = static_cast<native_handle_type>(handle);
+        data.socket     = socket;
 
         if (msg.msg_iov && msg.msg_iovlen > 0) {
             data.wsabuf.buf = static_cast<CHAR*>(msg.msg_iov[0].iov_base);
@@ -642,11 +678,6 @@ struct iocp_context final : context_base {
                 int err = -data->result;
                 if (err == static_cast<int>(ERROR_OPERATION_ABORTED)) {
                     io->cancel();
-                    return submit_result::ready;
-                }
-                if (err == WSAECONNRESET || err == static_cast<int>(ERROR_NETNAME_DELETED)) {
-                    ::std::get<2>(*sop) = 0u;
-                    io->complete();
                     return submit_result::ready;
                 }
                 io->error(::std::error_code(err, ::std::system_category()));
@@ -676,7 +707,7 @@ struct iocp_context final : context_base {
             return submit_result::error;
         }
 
-        ++outstanding;
+        record_submission(data);
         return submit_result::submit;
     }
 

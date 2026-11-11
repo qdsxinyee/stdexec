@@ -5,9 +5,11 @@
 #define INCLUDED_NETEXEC_DETAIL_SENDER
 
 #include <netexec/__detail/io_base.hpp>
+#include <netexec/__detail/context_base.hpp>
 #include <netexec/__detail/execution.hpp>
 #include <netexec/__detail/stop_token.hpp>
 #include <atomic>
+#include <mutex>
 #include <optional>
 #include <type_traits>
 #include <utility>
@@ -70,8 +72,15 @@ struct netexec::detail::sender_state : Desc::operation, ::netexec::detail::sende
               d_state(s) {}
         cancel_callback(cancel_callback&&) = default;
         auto operator()() {
+            ::std::lock_guard lock(this->d_state->d_cancel_mutex);
+            if (!this->d_state->d_can_cancel) {
+                this->d_state->d_stop_pending = true;
+                return;
+            }
             if (1 < ++this->d_state->d_outstanding) {
-                this->d_state->d_data.get_scheduler().cancel(this, this->d_state);
+                this->d_state->d_cancel_task.d_cancel_op = this;
+                this->d_state->d_data.get_scheduler().cancel(
+                    this, this->d_state, &this->d_state->d_cancel_task);
             }
         }
         auto complete() -> void override final {
@@ -82,6 +91,16 @@ struct netexec::detail::sender_state : Desc::operation, ::netexec::detail::sende
         auto error(::std::error_code) -> void override final { this->complete(); }
         auto cancel() -> void override final { this->complete(); }
     };
+    struct cancel_task : ::netexec::detail::context_base::task {
+        sender_state*                   d_state;
+        ::netexec::detail::io_base* d_cancel_op{};
+        explicit cancel_task(sender_state* s) : d_state(s) {}
+        auto complete() -> void override final {
+            auto* state     = this->d_state;
+            auto* cancel_op = this->d_cancel_op;
+            state->d_data.get_scheduler().cancel_on_loop(cancel_op, state);
+        }
+    };
     using upstream_state_t = decltype(stdexec::connect(
         ::std::declval<UpstreamSender&>(), ::std::declval<sender_upstream_receiver<Receiver>>()));
     using stop_token       = decltype(stdexec::get_stop_token(
@@ -90,40 +109,36 @@ struct netexec::detail::sender_state : Desc::operation, ::netexec::detail::sende
 
     Data                      d_data;
     upstream_state_t          d_state;
+    cancel_task               d_cancel_task;
     ::std::optional<callback> d_callback;
+    ::std::mutex              d_cancel_mutex;
+    bool                      d_can_cancel{false};
+    bool                      d_stop_pending{false};
 
     template <typename D, stdexec::receiver R>
     sender_state(D&& d, R&& r, UpstreamSender up)
         : Desc::operation(d.id(), d.events()),
           sender_state_base<Receiver>(::std::forward<R>(r)),
           d_data(::std::forward<D>(d)),
-          d_state(stdexec::connect(up, sender_upstream_receiver<Receiver>{this})) {}
+          d_state(stdexec::connect(up, sender_upstream_receiver<Receiver>{this})),
+          d_cancel_task(this) {}
     auto start() & noexcept -> void override {
         auto token(stdexec::get_stop_token(stdexec::get_env(this->d_receiver)));
         static_assert(not std::same_as<stdexec::never_stop_token, void>);
         ++this->d_outstanding;
         this->d_callback.emplace(token, this);
-        if (token.stop_requested()) {
+        bool stop_pending;
+        {
+            ::std::lock_guard lock(this->d_cancel_mutex);
+            stop_pending       = this->d_stop_pending || token.stop_requested();
+            this->d_can_cancel = !stop_pending;
+        }
+        if (stop_pending) {
             this->d_callback.reset();
             this->cancel();
             return;
         }
-#ifdef _MSC_VER
-        // On Windows, non-blocking sockets (e.g. accepted sockets marked via
-        // set_nonblocking()) cause add_outstanding() to invoke work() inline.
-        // If work() completes synchronously, it calls complete()/error()/cancel()
-        // internally, which decrements d_outstanding and resumes the coroutine -
-        // potentially destroying `this` before submit() returns.
-        // Calling this->complete() again after that would be a use-after-free.
-        // On Windows we therefore never touch `this` after submit().
         this->d_data.submit(this);
-#else
-
-        if (this->d_data.submit(this) == ::netexec::detail::submit_result::ready) {
-            this->complete();
-        }
-
-#endif
     }
     auto complete() -> void override final {
         if (0 == --this->d_outstanding) {

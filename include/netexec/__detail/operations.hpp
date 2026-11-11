@@ -34,16 +34,18 @@ struct netexec::detail::accept_desc {
         using socket_t             = acceptor_t::socket_type;
         using completion_signature = stdexec::set_value_t(socket_t, typename socket_t::endpoint_type);
 
-        acceptor_t& d_acceptor;
-        data(acceptor_t& a) : d_acceptor(a) {}
+        using scheduler_t = decltype(::std::declval<acceptor_t&>().get_scheduler());
+        scheduler_t                       d_scheduler;
+        ::netexec::detail::socket_id d_id;
+        data(acceptor_t& a) : d_scheduler(a.get_scheduler()), d_id(a.id()) {}
 
-        auto id() const { return this->d_acceptor.id(); }
+        auto id() const { return this->d_id; }
         auto events() const { return ::netexec::event_type::in; }
-        auto get_scheduler() { return this->d_acceptor.get_scheduler(); }
+        auto get_scheduler() { return this->d_scheduler; }
         auto set_value(operation& o, auto&& receiver) {
             stdexec::set_value(
                 ::std::move(receiver),
-                socket_t(this->d_acceptor.get_scheduler().get_context(), ::std::move(*::std::get<2>(o))),
+                socket_t(this->d_scheduler.get_context(), ::std::move(*::std::get<2>(o))),
                 typename socket_t::endpoint_type(::std::get<0>(o)));
         }
         auto submit(auto* base) -> ::netexec::detail::submit_result {
@@ -178,8 +180,8 @@ struct netexec::detail::receive_from_desc {
         auto submit(auto* base) -> ::netexec::detail::submit_result {
             ::std::get<0>(*base).msg_iov     = this->d_buffers.data();
             ::std::get<0>(*base).msg_iovlen  = this->d_buffers.size();
-            ::std::get<0>(*base).msg_name    = this->d_buffers.data();
-            ::std::get<0>(*base).msg_namelen = this->d_buffers.size();
+            ::std::get<0>(*base).msg_name    = this->d_endpoint.data();
+            ::std::get<0>(*base).msg_namelen = this->d_endpoint.size();
             return this->d_stream.get_scheduler().receive(base);
         }
     };

@@ -66,33 +66,74 @@ struct netexec::detail::poll_context final : ::netexec::detail::context_base {
     timer_priority_t                                                   d_timeouts;
     ::netexec::detail::context_base::task*                          d_tasks{};
     ::std::mutex                                                        d_tasks_mutex;
-#if !defined(_MSC_VER)
-    // eventfd used to wake the polling thread when work is posted from other
-    // threads (e.g. the blocking thread pool).  It is kept in d_poll as a
-    // permanent entry whose d_outstanding slot is a nullptr sentinel.
+    // Wake-up channel used to interrupt poll() when work is posted from other
+    // threads (e.g. the blocking thread pool, or a cancellation request).  It
+    // is kept in d_poll as a permanent entry whose d_outstanding slot is a
+    // nullptr sentinel.
+#ifdef _MSC_VER
+    // WSAPoll() can only wait on sockets, so a UDP socket connected to itself
+    // acts as the wake-up channel (a poor man's eventfd).
+    ::SOCKET d_wakeup_fd{INVALID_SOCKET};
+#else
     int d_wakeup_fd{-1};
 #endif
 
-#if !defined(_MSC_VER)
     poll_context() {
-        this->d_wakeup_fd = ::eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
-        if (this->d_wakeup_fd >= 0) {
-            this->d_poll.emplace_back(::pollfd{this->d_wakeup_fd, static_cast<short>(POLLIN), short()});
-            this->d_outstanding.emplace_back(nullptr);
+#ifdef _MSC_VER
+        ::SOCKET s = ::socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+        if (s == INVALID_SOCKET) {
+            throw ::std::system_error(sock_errno(), ::std::system_category(), "wake-up socket failed");
         }
+        ::sockaddr_in addr{};
+        addr.sin_family      = AF_INET;
+        addr.sin_addr.s_addr = ::htonl(INADDR_LOOPBACK);
+        addr.sin_port        = 0; // let the kernel pick a free port
+        int addr_len         = sizeof(addr);
+        if (::bind(s, reinterpret_cast<::sockaddr*>(&addr), sizeof(addr)) == SOCKET_ERROR ||
+            ::getsockname(s, reinterpret_cast<::sockaddr*>(&addr), &addr_len) == SOCKET_ERROR ||
+            ::connect(s, reinterpret_cast<::sockaddr*>(&addr), addr_len) == SOCKET_ERROR) {
+            int err = sock_errno();
+            ::closesocket(s);
+            throw ::std::system_error(err, ::std::system_category(), "wake-up socket setup failed");
+        }
+        ::u_long mode = 1;
+        ::ioctlsocket(s, FIONBIO, &mode);
+        this->d_wakeup_fd = s;
+#else
+        this->d_wakeup_fd = ::eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
+        if (this->d_wakeup_fd < 0) {
+            // Without a wake-up channel cross-thread wake-ups would silently
+            // never arrive; fail the context construction instead.
+            throw ::std::system_error(errno, ::std::system_category(), "eventfd failed");
+        }
+#endif
+        this->d_poll.emplace_back(
+            ::pollfd{static_cast<decltype(::pollfd{}.fd)>(this->d_wakeup_fd), static_cast<short>(POLLIN), short()});
+        this->d_outstanding.emplace_back(nullptr);
     }
     ~poll_context() override {
+#ifdef _MSC_VER
+        if (this->d_wakeup_fd != INVALID_SOCKET) {
+            ::closesocket(this->d_wakeup_fd);
+        }
+#else
         if (this->d_wakeup_fd >= 0) {
             ::close(this->d_wakeup_fd);
         }
+#endif
     }
 
     auto drain_wakeup() -> void {
+#ifdef _MSC_VER
+        char buffer[64];
+        while (0 < ::recv(this->d_wakeup_fd, buffer, sizeof(buffer), 0)) {
+        }
+#else
         ::std::uint64_t value{};
         while (::read(this->d_wakeup_fd, &value, sizeof(value)) == sizeof(value)) {
         }
-    }
 #endif
+    }
 
     auto make_socket(::netexec::detail::native_handle_type handle) -> ::netexec::detail::socket_id override final {
         return this->d_sockets.insert(handle);
@@ -228,30 +269,47 @@ struct netexec::detail::poll_context final : ::netexec::detail::context_base {
                 }
             } else {
                 for (::std::size_t i(this->d_poll.size()); 0 < i--;) {
-                    if (this->d_poll[i].revents & (this->d_poll[i].events | POLLERR)) {
+                    // Always dispatch on error/hang-up, not just on the requested
+                    // events: on Windows WSAPoll reports a graceful peer close as
+                    // POLLHUP *without* POLLIN, and Linux may report POLLERR only.
+                    // The work functions turn these into EOF (0 bytes) or an error.
+                    if (this->d_poll[i].revents & (this->d_poll[i].events | POLLERR | POLLHUP | POLLNVAL)) {
                         ::netexec::detail::io_base* completion = this->d_outstanding[i];
-#if !defined(_MSC_VER)
                         if (completion == nullptr) {
-                            // Wake-up fd: drain it and re-enter run_one() so the
-                            // tasks posted from other threads get processed.
+                            // Wake-up channel: drain it and re-enter run_one() so
+                            // the tasks posted from other threads get processed.
                             this->drain_wakeup();
                             return ::std::size_t(1);
                         }
-#endif
                         this->remove_outstanding(i);
                         completion->work(*this, completion);
                         return ::std::size_t(1);
                     }
                 }
-                if (0u < this->process_timeout(::std::chrono::system_clock::now())) {
-                    return 1u;
-                }
+            }
+            // Whenever poll() wakes (or is skipped) without dispatching a
+            // completion, check for work posted from other threads - e.g.
+            // cancellation tasks - and for expired timers. Without this, tasks
+            // posted while the loop is blocked would only be noticed if a
+            // socket event or the wake-up fd happened to arrive.
+            if (0u < this->process_task()) {
+                return 1u;
+            }
+            if (0u < this->process_timeout(::std::chrono::system_clock::now())) {
+                return 1u;
             }
         }
         return ::std::size_t{};
     }
     auto wakeup() -> void {
-#if !defined(_MSC_VER)
+#ifdef _MSC_VER
+        if (this->d_wakeup_fd != INVALID_SOCKET) {
+            const char one = 1;
+            // Failure (e.g. WSAEWOULDBLOCK on a full buffer) means the polling
+            // thread is already being woken up; nothing more to do.
+            (void)::send(this->d_wakeup_fd, &one, 1, 0);
+        }
+#else
         if (this->d_wakeup_fd >= 0) {
             const ::std::uint64_t one = 1;
             // Failure (e.g. EAGAIN on a full counter) means the polling thread
@@ -286,35 +344,16 @@ struct netexec::detail::poll_context final : ::netexec::detail::context_base {
         return ::netexec::detail::submit_result::ready;
     }
 
-    auto cancel(::netexec::detail::io_base* cancel_op, ::netexec::detail::io_base* op) -> void override final {
+    auto cancel_on_loop(::netexec::detail::io_base* cancel_op, ::netexec::detail::io_base* op)
+        -> void override final {
         auto it(::std::find(this->d_outstanding.begin(), this->d_outstanding.end(), op));
         if (it != this->d_outstanding.end()) {
             this->remove_outstanding(std::size_t(::std::distance(this->d_outstanding.begin(), it)));
             op->cancel();
-            cancel_op->cancel();
         } else if (this->d_timeouts.erase(op)) {
             op->cancel();
-            cancel_op->cancel();
-        } else {
-
-#ifdef _MSC_VER
-            // On Windows, accepted sockets are set non-blocking (blocking=false),
-            // so add_outstanding() calls work() immediately. If work() returns
-            // ready, op->complete() has already been called and op was never
-            // inserted into d_outstanding or d_timeouts.
-            // when_any then tries to cancel the peer op (e.g. the timeout timer)
-            // which arrives here having already fired and been removed from its
-            // queue. This is a normal completion-vs-cancellation race, not an
-            // error. We only need to notify cancel_op so when_any can clean up;
-            // op itself has already completed normally and needs no action.
-            cancel_op->cancel();
-#else
-            // On Linux all accepted sockets remain blocking=true, so work() is
-            // never called immediately and ops are always in a queue when
-            // cancel() is called. Reaching here indicates a real bug.
-            std::cerr << "ERROR: poll_context::cancel(): entity not cancelled!\n";
-#endif
         }
+        cancel_op->cancel();
     }
     auto schedule(::netexec::detail::context_base::task* tsk) -> void override {
         {
@@ -330,7 +369,7 @@ struct netexec::detail::poll_context final : ::netexec::detail::context_base {
         op->work    = [](::netexec::detail::context_base&, ::netexec::detail::io_base* o) {
             auto& cmp(*static_cast<poll_operation*>(o));
             cmp.complete();
-            return ::netexec::detail::submit_result::submit;
+            return ::netexec::detail::submit_result::ready;
         };
         return this->add_outstanding(op);
     }
@@ -402,11 +441,6 @@ struct netexec::detail::poll_context final : ::netexec::detail::context_base {
             op->complete();
             return ::netexec::detail::submit_result::ready;
         }
-#ifdef _MSC_VER
-        // On Windows we must also update the blocking flag in the socket record
-        // because F_GETFL is unavailable and make_socket() defaults to blocking=true.
-        this->set_nonblocking(op->id);
-#endif
         switch (sock_errno()) {
         default:
             op->error(::std::error_code(sock_errno(), ::std::system_category()));
@@ -441,7 +475,17 @@ struct netexec::detail::poll_context final : ::netexec::detail::context_base {
             }
         };
 
-        return this->add_outstanding(op);
+        // Register with poll() before marking the socket record non-blocking:
+        // add_outstanding() attempts work() inline for non-blocking records, but
+        // a non-blocking connect in progress reports SO_ERROR == 0 and would be
+        // mistaken for a completed connection.
+        auto result = this->add_outstanding(op);
+#ifdef _MSC_VER
+        // On Windows we must also update the blocking flag in the socket record
+        // because F_GETFL is unavailable and make_socket() defaults to blocking=true.
+        this->set_nonblocking(op->id);
+#endif
+        return result;
     }
     auto receive(::netexec::detail::context_base::receive_operation* op)
         -> ::netexec::detail::submit_result override {
@@ -459,13 +503,6 @@ struct netexec::detail::poll_context final : ::netexec::detail::context_base {
                     default:
                         completion.error(::std::error_code(sock_errno(), ::std::system_category()));
                         return ::netexec::detail::submit_result::error;
-                    case ECONNRESET:
-#ifndef _MSC_VER
-                    case EPIPE:
-#endif
-                        ::std::get<2>(completion) = 0u;
-                        completion.complete();
-                        return ::netexec::detail::submit_result::ready;
                     case EINTR:
                         break;
                     case EWOULDBLOCK:
@@ -491,13 +528,6 @@ struct netexec::detail::poll_context final : ::netexec::detail::context_base {
                     default:
                         completion.error(::std::error_code(sock_errno(), ::std::system_category()));
                         return ::netexec::detail::submit_result::error;
-                    case ECONNRESET:
-#ifndef _MSC_VER
-                    case EPIPE:
-#endif
-                        ::std::get<2>(completion) = 0u;
-                        completion.complete();
-                        return ::netexec::detail::submit_result::ready;
                     case EINTR:
                         break;
                     case EWOULDBLOCK:

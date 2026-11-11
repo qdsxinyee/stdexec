@@ -71,4 +71,21 @@ TEST_CASE("netexec iocp - timer fires", "[netexec][iocp]") {
     CHECK(fired);
 }
 
+TEST_CASE("netexec iocp - run() returns with an idle socket open", "[netexec][iocp]") {
+    netexec::scope scope;
+    // Deliberately kept open across run(): an idle socket never produces
+    // completions, so it must not keep the event loop alive.
+    net::ip::tcp::socket idle(scope.get_context(), netexec_test::make_server_endpoint(0));
+    bool fired = false;
+
+    ex::spawn(
+        net::resume_after(scope.get_scheduler(), 10ms)
+            | ex::then([&]() noexcept { fired = true; })
+            | ex::upon_error([](auto&&) noexcept {}),
+        scope.get_token());
+
+    ex::sync_wait(scope.run());
+    CHECK(fired);
+}
+
 #endif // NET_EXEC_USE_IOCP
