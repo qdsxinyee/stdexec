@@ -231,6 +231,20 @@ include(GNUInstallDirs)
 
 target_link_libraries(stdexec INTERFACE Threads::Threads)
 
+# netexec's default io backend on Linux is io_uring when liburing is
+# available (see include/netexec/__detail/platform.hpp).  Link it here so
+# consumers of the stdexec target don't have to.
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  find_path(NETEXEC_LIBURING_INCLUDE_DIR NAMES liburing.h)
+  find_library(NETEXEC_LIBURING_LIBRARY NAMES uring)
+  if(NETEXEC_LIBURING_INCLUDE_DIR AND NETEXEC_LIBURING_LIBRARY)
+    message(STATUS "netexec: liburing found (${NETEXEC_LIBURING_LIBRARY}); default io backend is io_uring")
+    target_link_libraries(stdexec INTERFACE ${NETEXEC_LIBURING_LIBRARY})
+  else()
+    message(STATUS "netexec: liburing not found; default io backend is poll()")
+  endif()
+endif()
+
 # Use C++20 standard
 target_compile_features(stdexec INTERFACE cxx_std_20)
 

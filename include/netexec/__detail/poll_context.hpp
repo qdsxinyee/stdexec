@@ -282,7 +282,14 @@ struct netexec::detail::poll_context final : ::netexec::detail::context_base {
                             return ::std::size_t(1);
                         }
                         this->remove_outstanding(i);
-                        completion->work(*this, completion);
+                        if (completion->work(*this, completion) == ::netexec::detail::submit_result::submit) {
+                            // The readiness indication was stale - e.g. an
+                            // accept queue drained by a reset between poll()
+                            // and accept(), or data consumed by a sibling
+                            // operation on the same fd: re-register the
+                            // operation instead of dropping it.
+                            this->add_outstanding(completion);
+                        }
                         return ::std::size_t(1);
                     }
                 }

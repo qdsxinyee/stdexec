@@ -29,7 +29,33 @@
 //   sendmsg(...)          - WSASendMsg() (loaded dynamically)
 //   getsockopt(...)       - casts void* -> char* for WinSock2
 //   setsockopt(...)       - casts const void* -> const char* for WinSock2
+//
+// This header also selects the default io backend (see below).
 // ----------------------------------------------------------------------------
+
+// ---- default io backend selection -------------------------------------------
+// The io backend can be forced by defining exactly one of NET_EXEC_USE_IOCP,
+// NET_EXEC_USE_URING, NET_EXEC_USE_EPOLL or NET_EXEC_USE_POLL.  When none of
+// them is defined, pick a platform default: IOCP on Windows, io_uring on
+// Linux when the liburing headers are available (linking against liburing is
+// wired up by the CMake build), and poll() everywhere else.
+#if !defined(NET_EXEC_USE_IOCP) && !defined(NET_EXEC_USE_URING) && !defined(NET_EXEC_USE_EPOLL) \
+    && !defined(NET_EXEC_USE_POLL)
+#  ifdef _MSC_VER
+#    define NET_EXEC_USE_IOCP
+#  elif defined(__linux__)
+#    if defined(__has_include)
+#      if __has_include(<liburing.h>)
+#        define NET_EXEC_USE_URING
+#      endif
+#    endif
+#    if !defined(NET_EXEC_USE_URING)
+#      define NET_EXEC_USE_POLL
+#    endif
+#  else
+#    define NET_EXEC_USE_POLL
+#  endif
+#endif
 
 #ifdef _MSC_VER
 

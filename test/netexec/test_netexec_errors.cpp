@@ -77,9 +77,15 @@ TEST_CASE("netexec - connection reset is not graceful EOF", "[netexec][errors]")
     };
     auto receive_reset = [](netexec::scope& scope, std::uint16_t port, std::error_code* error) -> exec::task<void> {
         net::ip::tcp::socket socket(scope.get_context(), netexec_test::make_server_endpoint(port));
-        co_await net::ip::tcp::async_connect(socket);
-        char buffer[16];
+        // The reset surfaces as an error on whichever operation the backend
+        // dispatches first after the RST arrives: with epoll the acceptor may
+        // run before the client's connect completion, so SO_ERROR can already
+        // report ECONNRESET on connect; with poll/uring the connect completes
+        // first and the receive reports the reset.  Either way the reset must
+        // be an error, never a graceful 0-byte EOF.
         try {
+            co_await net::ip::tcp::async_connect(socket);
+            char buffer[16];
             co_await net::ip::tcp::async_receive(socket, net::buffer(buffer));
         } catch (const std::system_error& ec) {
             *error = ec.code();

@@ -18,6 +18,8 @@
 #include <netexec/__detail/uring_context.hpp>
 #elif defined(NET_EXEC_USE_IOCP)
 #include <netexec/__detail/iocp_context.hpp>
+#elif defined(NET_EXEC_USE_EPOLL)
+#include <netexec/__detail/epoll_context.hpp>
 #else
 #include <netexec/__detail/poll_context.hpp>
 #endif
@@ -47,6 +49,8 @@ class netexec::io_context {
     ::std::unique_ptr<::netexec::detail::context_base> d_owned{new ::netexec::detail::uring_context()};
 #elif defined(NET_EXEC_USE_IOCP)
     ::std::unique_ptr<::netexec::detail::context_base> d_owned{new ::netexec::detail::iocp_context()};
+#elif defined(NET_EXEC_USE_EPOLL)
+    ::std::unique_ptr<::netexec::detail::context_base> d_owned{new ::netexec::detail::epoll_context()};
 #else
     ::std::unique_ptr<::netexec::detail::context_base> d_owned{new ::netexec::detail::poll_context()};
 #endif
