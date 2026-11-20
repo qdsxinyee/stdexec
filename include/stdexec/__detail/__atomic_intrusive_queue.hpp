@@ -17,6 +17,8 @@
 
 #include "__config.hpp"
 
+#include "__jspi.hpp"  // IWYU pragma: keep (empty without the web opt-in)
+
 //
 #include "__atomic.hpp"
 #include "__intrusive_queue.hpp"
@@ -64,8 +66,15 @@ namespace STDEXEC
     STDEXEC_ATTRIBUTE(host, device)
     constexpr void wait_for_item() noexcept
     {
+#if defined(__EMSCRIPTEN__) && defined(STDEXEC_EMSCRIPTEN_JSPI)
+      // JSPI: suspend the wasm stack for one browser event-loop turn instead
+      // of blocking the browser-owned thread. The caller re-checks its
+      // predicate after the stack resumes.
+      STDEXEC::__jspi::yield();
+#else
       // Wait until the queue has an item in it:
       __head_.wait(nullptr);
+#endif
     }
 
     STDEXEC_ATTRIBUTE(nodiscard, host, device)
