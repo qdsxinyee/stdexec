@@ -59,6 +59,10 @@ namespace STDEXEC
 
       // There can be only one consumer thread, so we can use notify_one here instead of
       // notify_all:
+#if defined(__EMSCRIPTEN__) && defined(STDEXEC_EMSCRIPTEN_JSPI)
+      // Wake a JSPI-parked consumer, if any (no-op otherwise).
+      STDEXEC::__jspi::resolve(STDEXEC::__jspi::handle_of(this));
+#endif
       __head_.notify_one();
       return true;
     }
@@ -67,10 +71,11 @@ namespace STDEXEC
     constexpr void wait_for_item() noexcept
     {
 #if defined(__EMSCRIPTEN__) && defined(STDEXEC_EMSCRIPTEN_JSPI)
-      // JSPI: suspend the wasm stack for one browser event-loop turn instead
-      // of blocking the browser-owned thread. The caller re-checks its
-      // predicate after the stack resumes.
-      STDEXEC::__jspi::yield();
+      // JSPI: park the whole wasm stack on a one-shot promise that push()
+      // resolves -- event-driven, zero polling. The stack resumes the
+      // moment an item arrives; the caller re-checks its predicate after
+      // resuming.
+      STDEXEC::__jspi::park(STDEXEC::__jspi::handle_of(this));
 #else
       // Wait until the queue has an item in it:
       __head_.wait(nullptr);
